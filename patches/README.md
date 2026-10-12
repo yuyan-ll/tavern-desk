@@ -13,6 +13,7 @@
 | 005-状态板不收桌边楼 | 四.4 / 上游改动 5 | `src/chat/desk.ts`、`src/chat/deskBoardRefresh.ts` |
 | 006-前端地址取origin口令首次输入 | 五 / 上游改动 6 | `frontend/app/study/page.tsx`,新增 `frontend/app/study/tokenGate.tsx` |
 | 007-导出正文默认不收桌边楼 | 四.5 | `frontend/app/study/TypingDesk.tsx` |
+| 008-桌边判据收紧 | 四.1 补 | `src/core/deskAside.ts`:「桌边」后面要跟冒号 / 逗号 / 空白 / 换行(或整楼只有这两个字),直接接正文的(「桌边的烛火晃了一下」)不算 |
 
 007 说明:施工单四.5 写的是 ChaptersStudio「从楼层收章节的地方」,但 16b7abd 的 ChaptersStudio
 没有从楼层收章节的入口(章节是手填的),楼层变成稿子只有打字桌 ⋯ 菜单「导出正文」这一条路,
