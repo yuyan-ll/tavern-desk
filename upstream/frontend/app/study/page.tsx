@@ -202,16 +202,15 @@ const RAIL_CSS = `
   .sty-shell.writing .sty-rail { display: none; }
   .sty-scroll { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 32px; }
   .desk-list { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 40px !important; }
-  /* 写作窗的阅读态:我的楼不套卡片、宋体、行距松;她的楼是左边一道线的引文;
-     「复制 编辑 第几楼」那行藏起来,点一下楼层才出。 */
+  /* 写作窗的阅读态:我的楼不套卡片、宋体、行距松,段距收窄(段落切法见 TypingDesk splitParagraphs);
+     她的楼是靠右的小气泡(她点的:全都靠右);「复制 编辑 第几楼」那行藏起来,点一下楼层才出。 */
   .desk-main { padding: 14px 16px 10px !important; }
   .desk-main > div > * + * { margin-top: 20px !important; }
   .floor-ai-label { display: none !important; }
   .floor-ai-wrap { max-width: 100% !important; }
   .floor-ai { max-width: 100% !important; background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 2px !important; font-family: var(--font-reading-user, var(--font-serc)); font-size: 16.5px !important; line-height: 1.95 !important; color: var(--ink-deep) !important; }
-  .floor-user-wrap { align-items: flex-start !important; }
-  .floor-user { max-width: 100% !important; background: transparent !important; border-left: 2px solid var(--scale-2); border-radius: 0 !important; padding: 2px 0 2px 12px !important; color: var(--ink2) !important; font-size: 14.5px !important; line-height: 1.7 !important; }
-  html[data-glass="1"] .floor-user { border-radius: 14px 14px 4px 14px !important; padding: 10px 14px !important; color: var(--ink-deep) !important; }
+  .floor-p + .floor-p { margin-top: 0.7em !important; }
+  .floor-user { max-width: 86% !important; border-radius: 18px 18px 6px 18px !important; padding: 9px 14px !important; font-size: 15px !important; line-height: 1.75 !important; }
   .floor-meta { display: none !important; }
   .floor-group.meta-open .floor-meta { display: flex !important; }
   .floor-meta * { font-size: 10.5px !important; }

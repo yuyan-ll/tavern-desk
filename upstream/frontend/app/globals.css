@@ -191,6 +191,9 @@ body {
 
 /* ── 气泡断词：长英文/URL 允许在任意处折行，不撑破气泡 ── */
 .wrap-hard { overflow-wrap: break-word; overflow-wrap: anywhere; }
+/* ── 正文分段:一楼正文按空行切成段(TypingDesk 里 splitParagraphs),段距单独管,不再靠一整个
+   空行撑开。桌面上段距 = 一行行距(1.9em,跟以前空行一样高);手机上在 page.tsx 里收窄。 ── */
+.floor-p + .floor-p { margin-top: 1.9em; }
 
 /* ════════════════════════════════════════════════════════════
    液态玻璃(开关在墙纸面板,开了 html 上挂 data-glass="1")。
@@ -209,13 +212,22 @@ html[data-glass="1"] .sty-stage-scroll {
 }
 html[data-glass="1"] .glass,
 html[data-glass="1"] .desk-header,
-html[data-glass="1"] .chat-inputbar,
-html[data-glass="1"] .desk-menu {
+html[data-glass="1"] .chat-inputbar {
   background: var(--g-fill) !important;
   border: 1px solid var(--g-rim) !important;
+  /* 只写标准属性:构建期 lightningcss 见到手写的 -webkit- 前缀会把不带前缀的那句丢掉,
+     安卓/Chrome 就一点糊都没有了;前缀交给它按目标浏览器自己补。 */
   backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
   box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.15) !important;
+}
+/* ⋯ 菜单挂在头栏里面,头栏自己是一片毛玻璃,子元素的 backdrop-filter 只能糊到头栏那一层、
+   糊不到压在底下的正文(规范里叫 backdrop root);所以菜单不靠糊,直接铺实底的卡片色。
+   试过 97% 的半透明:截图里底下的字还是隐隐透上来,比 3% 该有的样子清楚得多(毛玻璃头栏的
+   子元素在 Chromium 里合成得不一样),干脆不透。 */
+html[data-glass="1"] .desk-menu {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--g-rim) !important;
+  box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
 }
 html[data-glass="1"] .desk-header { border-radius: 24px !important; }
 html[data-glass="1"] .chat-inputbar { border-radius: 26px !important; }
@@ -227,20 +239,18 @@ html[data-glass="1"] .chat-inputbar textarea {
   box-shadow: inset 0 1px 0 var(--g-hi) !important;
 }
 html[data-glass="1"] .chat-inputbar .desk-send {
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
 }
 html[data-glass="1"] .floor-user {
   background: color-mix(in srgb, var(--scale-1) 55%, transparent) !important;
   border: 1px solid var(--g-rim);
   backdrop-filter: blur(14px) saturate(160%);
-  -webkit-backdrop-filter: blur(14px) saturate(160%);
   box-shadow: inset 0 1px 0 var(--g-hi), 0 4px 14px var(--g-shadow);
 }
 html[data-glass="1"] .card {
   background: var(--g-card) !important;
   border: 1px solid var(--g-rim) !important;
   backdrop-filter: blur(18px) saturate(170%);
-  -webkit-backdrop-filter: blur(18px) saturate(170%);
   box-shadow: 0 8px 26px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
 }
 /* 写作窗:头栏、底栏浮在滚动区上,滚动区按量出来的高度留边 */

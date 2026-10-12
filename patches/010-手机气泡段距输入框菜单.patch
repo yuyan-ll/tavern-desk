@@ -1,0 +1,175 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 16:05:57 +0000
+Subject: [PATCH] frontend:
+ 手机上气泡全靠右、段距收窄、输入框跟发送对齐、⋯菜单压实
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:她装上 desk-v12 在手机上过了一遍,报了四处:她的气泡要全都靠右;正文段跟段的间距太宽;
+输入框跟右边的发送钮没对齐;点开 ⋯ 菜单,菜单上的字跟底下正文叠在一起看不清。
+- page.tsx 手机块:她的楼从「左边一道线的引文」改回靠右的小气泡(去掉 align-items:flex-start
+  那句,沿用桌面的 bg-scale-1 圆角气泡,只改尺寸);正文段距 .floor-p 收到 0.7em。
+- TypingDesk.tsx:正文按空行切段(splitParagraphs),每段一个块级 span,段距由 .floor-p 管,
+  不再靠整个空行撑;协议块折叠签后面跟着的空行一并吞掉。段的边界只取决于前缀,流式追加不挪
+  已有边界,段内仍走 chunkStreamText 分块,选区保护不变。落库/导出的 f.content 一字不动。
+  输入框 textarea 加 display:block——行内块坐在基线上,底下多出 8px 下伸空隙,items-end 对齐
+  的是空隙的底,框本体就比发送钮浮高;手机上框与发送钮统一 46px。
+- globals.css:只写标准 backdrop-filter,不再手写 -webkit- 前缀——构建期 lightningcss 见到手写
+  前缀会把不带前缀的那句丢掉,打出来的包里头栏/输入区/⋯菜单在安卓上一点糊都没有(量过:
+  头栏算出来只剩 Tailwind 的 blur(8px),菜单 none);前缀交给它按目标浏览器自己补。
+  ⋯菜单挂在头栏里面,子元素的 backdrop-filter 只能糊到头栏那一层(backdrop root),糊不到底下
+  正文,所以菜单改铺实底的卡片色,不靠糊(97% 半透明试过,底下的字仍隐隐透上来)。玻璃模式发送钮的投影收小,免得看着比框还往下坠。
+---
+ frontend/app/globals.css          | 22 ++++++++++++++++------
+ frontend/app/study/TypingDesk.tsx | 26 +++++++++++++++++++++-----
+ frontend/app/study/page.tsx       |  9 ++++-----
+ 3 files changed, 41 insertions(+), 16 deletions(-)
+
+diff --git a/frontend/app/globals.css b/frontend/app/globals.css
+index d63bf9c..e226c9d 100644
+--- a/frontend/app/globals.css
++++ b/frontend/app/globals.css
+@@ -191,6 +191,9 @@ body {
+ 
+ /* ── 气泡断词：长英文/URL 允许在任意处折行，不撑破气泡 ── */
+ .wrap-hard { overflow-wrap: break-word; overflow-wrap: anywhere; }
++/* ── 正文分段:一楼正文按空行切成段(TypingDesk 里 splitParagraphs),段距单独管,不再靠一整个
++   空行撑开。桌面上段距 = 一行行距(1.9em,跟以前空行一样高);手机上在 page.tsx 里收窄。 ── */
++.floor-p + .floor-p { margin-top: 1.9em; }
+ 
+ /* ════════════════════════════════════════════════════════════
+    液态玻璃(开关在墙纸面板,开了 html 上挂 data-glass="1")。
+@@ -209,14 +212,23 @@ html[data-glass="1"] .sty-stage-scroll {
+ }
+ html[data-glass="1"] .glass,
+ html[data-glass="1"] .desk-header,
+-html[data-glass="1"] .chat-inputbar,
+-html[data-glass="1"] .desk-menu {
++html[data-glass="1"] .chat-inputbar {
+   background: var(--g-fill) !important;
+   border: 1px solid var(--g-rim) !important;
++  /* 只写标准属性:构建期 lightningcss 见到手写的 -webkit- 前缀会把不带前缀的那句丢掉,
++     安卓/Chrome 就一点糊都没有了;前缀交给它按目标浏览器自己补。 */
+   backdrop-filter: blur(24px) saturate(180%);
+-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+   box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.15) !important;
+ }
++/* ⋯ 菜单挂在头栏里面,头栏自己是一片毛玻璃,子元素的 backdrop-filter 只能糊到头栏那一层、
++   糊不到压在底下的正文(规范里叫 backdrop root);所以菜单不靠糊,直接铺实底的卡片色。
++   试过 97% 的半透明:截图里底下的字还是隐隐透上来,比 3% 该有的样子清楚得多(毛玻璃头栏的
++   子元素在 Chromium 里合成得不一样),干脆不透。 */
++html[data-glass="1"] .desk-menu {
++  background: var(--card-bg) !important;
++  border: 1px solid var(--g-rim) !important;
++  box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
++}
+ html[data-glass="1"] .desk-header { border-radius: 24px !important; }
+ html[data-glass="1"] .chat-inputbar { border-radius: 26px !important; }
+ html[data-glass="1"] .desk-pill,
+@@ -227,20 +239,18 @@ html[data-glass="1"] .chat-inputbar textarea {
+   box-shadow: inset 0 1px 0 var(--g-hi) !important;
+ }
+ html[data-glass="1"] .chat-inputbar .desk-send {
+-  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
++  box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+ }
+ html[data-glass="1"] .floor-user {
+   background: color-mix(in srgb, var(--scale-1) 55%, transparent) !important;
+   border: 1px solid var(--g-rim);
+   backdrop-filter: blur(14px) saturate(160%);
+-  -webkit-backdrop-filter: blur(14px) saturate(160%);
+   box-shadow: inset 0 1px 0 var(--g-hi), 0 4px 14px var(--g-shadow);
+ }
+ html[data-glass="1"] .card {
+   background: var(--g-card) !important;
+   border: 1px solid var(--g-rim) !important;
+   backdrop-filter: blur(18px) saturate(170%);
+-  -webkit-backdrop-filter: blur(18px) saturate(170%);
+   box-shadow: 0 8px 26px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
+ }
+ /* 写作窗:头栏、底栏浮在滚动区上,滚动区按量出来的高度留边 */
+diff --git a/frontend/app/study/TypingDesk.tsx b/frontend/app/study/TypingDesk.tsx
+index 071e5ff..f26dfaf 100644
+--- a/frontend/app/study/TypingDesk.tsx
++++ b/frontend/app/study/TypingDesk.tsx
+@@ -393,6 +393,15 @@ function chunkStreamText(s: string): string[] {
+   }
+   return out;
+ }
++// ── 正文分段(只管显示,落库/导出的 f.content 一字不动):按空行切成段,每段一个块级 span,
++// 段距由 .floor-p 管(globals.css 桌面 1.9em = 以前一个空行的高度;page.tsx 手机上收到 0.7em)。
++// 以前整楼一个 pre-wrap 文本节点,段与段之间靠一整个空行撑开,手机上她嫌太宽;协议块(<title>…)
++// 折起来之后紧跟的几个空行也一并吞掉,不再在折叠签下面留一大截空白。
++// 跟上面分块的约定兼容:段的边界只取决于前缀里有没有出现空行,流式追加不会挪已有边界,
++// 每段内部再走 chunkStreamText,前面段的文本节点原样不动,选区活得下来。
++function splitParagraphs(s: string): string[] {
++  return s.replace(/^\n+/, '').replace(/\n+$/, '').split(/\n{2,}/).filter((p) => p.length > 0);
++}
+ 
+ // ── 每楼下方的动作条(编辑/复制/透视/楼层号/时间戳)。user 楼层和 assistant 楼层共用同一条,
+ // 靠 isAssistant 挑行为——挂在模块顶层而不是 write 屏渲染函数内部,免得每次 .map() 迭代都现造一个
+@@ -3647,9 +3656,13 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                               key={`${f.key}-seg-${i}`}
+                               className="floor-ai max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]"
+                             >
+-                              {/* 两态一律分块渲染保选区(为什么落库后也分块:见 chunkStreamText 头注释⚠️段) */}
++                              {/* 先按空行切段(splitParagraphs,段距见 .floor-p),段内再分块渲染保选区(为什么落库后也分块:见 chunkStreamText 头注释⚠️段) */}
+                               {/* display:contents:分块 span 不生成行内盒,排版与单段文字等价(实验:iOS 内滚区下多 span 选区不画蓝) */}
+-                              {chunkStreamText(seg.text).map((c, ci) => <span key={ci} style={{ display: 'contents' }}>{c}</span>)}
++                              {splitParagraphs(seg.text).map((para, pi) => (
++                                <span key={pi} className="floor-p" style={{ display: 'block' }}>
++                                  {chunkStreamText(para).map((c, ci) => <span key={ci} style={{ display: 'contents' }}>{c}</span>)}
++                                </span>
++                              ))}
+                             </div>
+                           ) : null
+                         )}
+@@ -4144,15 +4157,18 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 onBlur={() => setAtMenuOpen(false)}
+                 rows={1}
+                 placeholder="接着写点什么…"
+-                className="w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto max-[700px]:min-h-11 max-[700px]:py-[11px] max-[700px]:px-3.5 max-[700px]:rounded-2xl max-[700px]:text-[15px]"
++                // block:textarea 默认是行内块,坐在基线上,底下会多出一截字母下伸的空隙(量过:8px),
++                // 整条输入行 items-end 对齐的是那个空隙的底,输入框本体就比发送钮浮高一截——她说的「没对齐」。
++                // 手机上行高 24 + 上下各 10 + 边 2 = 46,跟发送钮同高。
++                className="block w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto max-[700px]:min-h-[46px] max-[700px]:leading-6 max-[700px]:py-[10px] max-[700px]:px-3.5 max-[700px]:rounded-2xl max-[700px]:text-[15px]"
+               />
+             </div>
+             {sending && turnKind !== null ? (
+-              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
++              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+                 ■ 暂停
+               </button>
+             ) : (
+-              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
++              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+                 发送
+               </button>
+             )}
+diff --git a/frontend/app/study/page.tsx b/frontend/app/study/page.tsx
+index 053397a..e9afd01 100644
+--- a/frontend/app/study/page.tsx
++++ b/frontend/app/study/page.tsx
+@@ -202,16 +202,15 @@ const RAIL_CSS = `
+   .sty-shell.writing .sty-rail { display: none; }
+   .sty-scroll { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 32px; }
+   .desk-list { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 40px !important; }
+-  /* 写作窗的阅读态:我的楼不套卡片、宋体、行距松;她的楼是左边一道线的引文;
+-     「复制 编辑 第几楼」那行藏起来,点一下楼层才出。 */
++  /* 写作窗的阅读态:我的楼不套卡片、宋体、行距松,段距收窄(段落切法见 TypingDesk splitParagraphs);
++     她的楼是靠右的小气泡(她点的:全都靠右);「复制 编辑 第几楼」那行藏起来,点一下楼层才出。 */
+   .desk-main { padding: 14px 16px 10px !important; }
+   .desk-main > div > * + * { margin-top: 20px !important; }
+   .floor-ai-label { display: none !important; }
+   .floor-ai-wrap { max-width: 100% !important; }
+   .floor-ai { max-width: 100% !important; background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 2px !important; font-family: var(--font-reading-user, var(--font-serc)); font-size: 16.5px !important; line-height: 1.95 !important; color: var(--ink-deep) !important; }
+-  .floor-user-wrap { align-items: flex-start !important; }
+-  .floor-user { max-width: 100% !important; background: transparent !important; border-left: 2px solid var(--scale-2); border-radius: 0 !important; padding: 2px 0 2px 12px !important; color: var(--ink2) !important; font-size: 14.5px !important; line-height: 1.7 !important; }
+-  html[data-glass="1"] .floor-user { border-radius: 14px 14px 4px 14px !important; padding: 10px 14px !important; color: var(--ink-deep) !important; }
++  .floor-p + .floor-p { margin-top: 0.7em !important; }
++  .floor-user { max-width: 86% !important; border-radius: 18px 18px 6px 18px !important; padding: 9px 14px !important; font-size: 15px !important; line-height: 1.75 !important; }
+   .floor-meta { display: none !important; }
+   .floor-group.meta-open .floor-meta { display: flex !important; }
+   .floor-meta * { font-size: 10.5px !important; }
