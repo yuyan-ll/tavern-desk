@@ -13,6 +13,7 @@ import {
   type LoreTriggerValue, type LorePosition, type CharacterFields,
 } from './LoreTriggerFields';
 import { StudyShellProvider } from './studyShell';
+import { DeskTokenGate } from './tokenGate';
 
 // ── 数据形状(按后端契约来,字段名不许自己发明) ──
 type Stats = { by_category: Record<string, number>; by_project: Record<string, number>; total: number };
@@ -201,6 +202,13 @@ html.sty-lock-scroll, html.sty-lock-scroll body { overflow: hidden; }
 export default function StudyPage() {
   const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL;
   const token = process.env.NEXT_PUBLIC_AUTH_TOKEN;
+  // 两个环境变量配了任何一个:跟原来完全一样(编译期写死)。都没配(自托管构建):地址取页面自己的
+  // origin、口令首次打开时输一次存浏览器,取到之前显示等待——见 tokenGate.tsx。
+  if (workerUrl || token) return <StudyRoom workerUrl={workerUrl} token={token} />;
+  return <DeskTokenGate>{(origin, saved, forget) => <StudyRoom workerUrl={origin} token={saved} onForgetToken={forget} />}</DeskTokenGate>;
+}
+
+function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; token?: string; onForgetToken?: () => void }) {
   const base = `${workerUrl}/${token}`;
   const envOk = !!workerUrl && !!token;
 
@@ -755,6 +763,17 @@ export default function StudyPage() {
               );
             })}
           </div>
+          {onForgetToken && (
+            <button
+              type="button"
+              className="serc sty-rail-btn"
+              style={{ border: 0, marginTop: 'auto', color: 'var(--ink2)' }}
+              title="清掉存在这台设备上的口令,重新输入"
+              onClick={() => { if (view === 'desk' && typingDeskRef.current && !typingDeskRef.current.requestLeave()) return; onForgetToken(); }}
+            >
+              <span className="sty-rail-glyph">⚿</span><span className="sty-rail-label">换口令</span>
+            </button>
+          )}
         </nav>
 
         <div className="sty-main">
