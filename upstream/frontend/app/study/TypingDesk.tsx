@@ -59,6 +59,8 @@ type FloorReport = {
   // 解析成功但被后端协议闸拒收(缺协议键/丢键/协议键错形状,core/stateBoard.ts
   // stateBoardGateErrors),这里带上人话原因列表
   stateBoardGateErrors?: string[];
+  // 桌边话(后端 core/deskAside.ts):场外话楼层,导出正文默认不收,菜单里另有一项带上它们
+  aside?: boolean;
 };
 type FloorRole = 'user' | 'assistant';
 type Floor = {
@@ -2261,7 +2263,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     const p = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  function doExport() {
+  function doExport(withAside = false) {
     setMenuOpen(false);
     setExportError('');
     // 生成期间不导:流式楼层走的是**素颜**分支(渲染那边的 isSettled 判断),
@@ -2274,8 +2276,11 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
       // 只导已落库且不在流式中的楼层——口径逐字对齐渲染那边的 isSettled(!!f.id && !f.streaming)。
       const settled = floors.filter((f) => !!f.id && !f.streaming);
       const skipped = floors.length - settled.length;
-      const lines: string[] = [`# 打字桌 · ${title}`, '', `> ${win?.project || ''} · 导出于 ${now} · 共 ${settled.length} 楼${skipped ? `（另有 ${skipped} 楼还没落库，未收录）` : ''}`, ''];
-      for (const f of settled) {
+      // 桌边楼默认不收(场外话不是正文);「导出正文(含桌边话)」那一项才带上。
+      const picked = withAside ? settled : settled.filter((f) => f.report?.aside !== true);
+      const asideSkipped = settled.length - picked.length;
+      const lines: string[] = [`# 打字桌 · ${title}`, '', `> ${win?.project || ''} · 导出于 ${now} · 共 ${picked.length} 楼${skipped ? `（另有 ${skipped} 楼还没落库，未收录）` : ''}${asideSkipped ? `（另有 ${asideSkipped} 楼桌边话，未收录）` : ''}`, ''];
+      for (const f of picked) {
         const prose = floorProse(f);
         if (!prose.trim()) continue; // 整楼都是协议渣/空楼:不产出一个只有抬头的空段落(判空用 trim,内容仍是原文)
         // 抬头**不带时间戳**:导出的稿子要贴进母本,靠 Ctrl+H 一键把
@@ -3301,12 +3306,21 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                     <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
                     <div className="absolute right-0 mt-2 w-52 bg-card border border-line-soft rounded-2xl shadow-lg p-1.5 z-20 text-sm">
                       <button
-                        onClick={doExport}
+                        onClick={() => doExport()}
                         disabled={sending}
                         className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body disabled:opacity-40"
                       >
                         ↓ 导出正文
                       </button>
+                      {floors.some((f) => f.report?.aside === true) && (
+                        <button
+                          onClick={() => doExport(true)}
+                          disabled={sending}
+                          className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body disabled:opacity-40"
+                        >
+                          ↓ 导出正文(含桌边话)
+                        </button>
+                      )}
                       {/* disabled 跟 doCompress 里的闸口径一致——
                           时光带保存在飞时这颗就是灰的,她不用点一下才知道现在不行。 */}
                       <button
