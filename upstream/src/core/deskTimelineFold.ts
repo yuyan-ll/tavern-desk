@@ -2,11 +2,17 @@
 // desk-timeline module so TavernStudyHost.foldDeskTimeline can share the exact same batch
 // selection semantics without depending on any storage/model transport.
 
+import { isDeskAsideFloor } from './deskAside.ts';
+
 // Summarization must never end on a dangling user turn (a request the assistant has not yet
 // answered): trim the candidate batch back to the last assistant floor it contains. Orphaned
 // leading user floors ahead of that point still count (see production comment this mirrors) —
 // they are folded together with the assistant floor that answers them.
-export function selectDeskTimelineFoldBatch<T extends { role?: unknown }>(candidate: T[]): T[] {
+// Table-side asides (see deskAside.ts) never enter the timeline: they are dropped before the batch
+// is picked, so the summary never sees them, while the cursor still moves past any aside floors
+// that sit before the batch's last assistant floor.
+export function selectDeskTimelineFoldBatch<T extends { role?: unknown; report?: unknown }>(all: T[]): T[] {
+  const candidate = all.filter((floor) => !isDeskAsideFloor(floor));
   let lastSafe = -1;
   for (let index = 0; index < candidate.length; index++) {
     const role = candidate[index]?.role;

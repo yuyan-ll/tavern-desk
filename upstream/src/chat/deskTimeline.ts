@@ -12,6 +12,7 @@
 import { makeD1UsageSink } from '../storage/usageSink.ts';
 import { completeText, type CompleteTextUsage } from './modelBackend.ts';
 import { DESK_TIMELINE_KEEP } from '../core/deskLimits.ts';
+import { isDeskAsideFloor } from '../core/deskAside.ts';
 export { DESK_TIMELINE_KEEP } from '../core/deskLimits.ts';
 
 interface DeskTimelineEnv {
@@ -100,7 +101,10 @@ export function extractDeskTimelineAssistantBody(raw: unknown): string {
 // 那条尚未得到回复的尾楼，就不能让 cutoff 越过去。生成失败留下的早期孤儿 user 不构成永久路障：
 // 正常 UI 的“孤儿楼重发”会先删掉它；裸 API/历史异常若形成 user/user…assistant，后面的 assistant
 // 才是已经落库的剧情正本，允许连同此前输入一起越线。终点始终钉在候选范围内最后一条 assistant。
-export function selectDeskTimelineFoldBatch<T extends { role?: unknown }>(candidate: T[]): T[] {
+export function selectDeskTimelineFoldBatch<T extends { role?: unknown; report?: unknown }>(all: T[]): T[] {
+  // 桌边话(core/deskAside.ts)不进时光带:选批次前先滤掉,折叠正文自然也不含它们。游标照常越过
+  // 夹在中间的桌边楼(算"已处理",只是不进摘要);终点仍钉在最后一条非桌边的 assistant 上。
+  const candidate = all.filter((floor) => !isDeskAsideFloor(floor));
   let lastSafe = -1;
   for (let i = 0; i < candidate.length; i++) {
     const role = candidate[i]?.role;
@@ -307,7 +311,7 @@ export async function maybeFoldDeskTimeline(
     const binds = cutoff ? [cutoff.t, cutoff.t, cutoff.id] : [];
     const tail = (
       await env.OC_DB.prepare(
-        `SELECT id, role, content, created_at FROM desk_floors WHERE window_id = ? AND content != ''${cond} ORDER BY created_at ASC, id ASC`
+        `SELECT id, role, content, report, created_at FROM desk_floors WHERE window_id = ? AND content != ''${cond} ORDER BY created_at ASC, id ASC`
       ).bind(windowId, ...binds).all<any>()
     ).results as any[];
 
