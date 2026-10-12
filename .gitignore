@@ -1,0 +1,32 @@
+# 宿主本机配置与私有实现(不入仓)
+host/config.json
+host/segments.home.mjs
+host/*.key
+host/*.txt
+
+# 本机 SQLite 数据库(含 -wal / -shm)
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# 前端静态导出产物
+frontend/out/
+upstream/frontend/out/
+upstream/frontend/.next/
+
+# 依赖与临时目录
+node_modules/
+.tmp-*/
+
+# 安卓构建产物(debug.keystore 例外:签名要稳定,故意入仓)
+app/.gradle/
+app/build/
+app/app/build/
+app/local.properties
+app/.idea/
+app/.kotlin/
+*.iml
+.DS_Store
