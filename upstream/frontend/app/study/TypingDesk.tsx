@@ -399,6 +399,9 @@ function chunkStreamText(s: string): string[] {
 // 折起来之后紧跟的几个空行也一并吞掉,不再在折叠签下面留一大截空白。
 // 跟上面分块的约定兼容:段的边界只取决于前缀里有没有出现空行,流式追加不会挪已有边界,
 // 每段内部再走 chunkStreamText,前面段的文本节点原样不动,选区活得下来。
+// 桌边话判据,跟后端 src/core/deskAside.ts 同一条:「桌边」开头,后面是结尾/空白/冒号/逗号。
+const DESK_ASIDE_RE = /^桌边(?:$|[\s:：,，])/;
+
 function splitParagraphs(s: string): string[] {
   return s.replace(/^\n+/, '').replace(/\n+$/, '').split(/\n{2,}/).filter((p) => p.length > 0);
 }
@@ -1169,7 +1172,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
   // 「这扇窗还在写吗」,切回前台立刻问;不写了就重新载入窗口,那一楼就在了。进窗也问一声:划掉 app
   // 再打开、电脑那边还没写完的时候,一样等着接。
   // expect:断线那一刻手上知道的事,收尾时拿它判断这一楼到底写没写成,写成了把还给输入框的字收回去。
-  type RemoteExpect = { kind: 'send'; msg: string; lastAssistantId: string | null } | { kind: 'roll'; floorId: string; variants: number };
+  type RemoteExpect = { kind: 'send'; floorText: string; composerText: string; lastAssistantId: string | null } | { kind: 'roll'; floorId: string; variants: number };
   const [remoteWriting, setRemoteWriting] = useState(false);
   const remoteWritingRef = useRef(false);
   const remoteWatchSeqRef = useRef(0);
@@ -1207,7 +1210,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           landed = last.role === 'assistant' && last.id !== exp.lastAssistantId;
           // 用户楼其实存上了、只是确认没传回来:还给输入框的那句收回去,免得重发一遍
           const lastUser = [...fl].reverse().find((f) => f.role === 'user');
-          if (lastUser && String(lastUser.content || '').trim() === exp.msg && inputRef.current.trim() === exp.msg) {
+          if (lastUser && String(lastUser.content || '').trim() === exp.floorText && inputRef.current.trim() === exp.composerText) {
             setInput('');
             try { localStorage.setItem(`oc_desk_draft_${windowId}`, ''); } catch {}
           }
@@ -1365,6 +1368,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     loadWindow(id, false, genRef.current);
     watchRemoteTurn(genRef.current, id); // 划掉 app 再进来、电脑那边还没写完:接着等
     try { const d = localStorage.getItem(`oc_desk_draft_${id}`); setInput(d || ''); } catch { setInput(''); }
+    try { setAsideOnState(localStorage.getItem(`oc_desk_aside_${id}`) === '1'); } catch { setAsideOnState(false); }
   }
   async function backToList() {
     // 换配方PUT在飞时不许离窗:离窗后立刻重进会让canonical加载读到旧recipe_id,
@@ -1534,6 +1538,15 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
 
   // ── composer 草稿:按窗口分槽存 localStorage ──
   const [input, setInput] = useState('');
+  // 桌边钮(纸条旁边):亮着时说的话都是桌边话,发送时替她在前面安上「桌边：」(她自己手打了就不重复安),
+  // 后端照旧按这个前缀认、存楼时记 aside。点一下亮、再点一下灭,连着聊几句不用每句都点;亮灭按窗记在本机。
+  const [asideOn, setAsideOnState] = useState(false);
+  function toggleAside() {
+    const next = !asideOn;
+    setAsideOnState(next);
+    const id = curWindowIdRef.current;
+    if (id) { try { localStorage.setItem(`oc_desk_aside_${id}`, next ? '1' : ''); } catch {} }
+  }
   // send()里给"这条消息是不是还是composer里当前那份"当判据的地方
   // (onUserSaved清稿/失败回填)不能读闭包里的input——那是send()被调用那一刻的旧快照,resendOrphan
   // 的truncate网络往返+send()自己的SSE往返都要等好几百毫秒,这段时间完全可能已经在composer里
@@ -1767,6 +1780,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     if (recipeSwitchingRef.current) { setDeskError('配方切换中,稍等一两秒再试'); return; }
     if (remoteWritingRef.current) { setDeskError('上一楼电脑那边还在写,写完会自己出现'); return; }
     if (composerRef.current) composerRef.current.style.height = 'auto';
+    // 桌边钮亮着就安上「桌边：」;重发孤儿楼(overrideMsg)原文是什么就是什么,不动。
+    // 还给输入框的、跟输入框比的,一律是她打的原话 msg;落楼、发给后端的是 wire。
+    const wire = overrideMsg === undefined && asideOn && !DESK_ASIDE_RE.test(msg) ? `桌边：${msg}` : msg;
     const windowId = curWindowId;
     const lastAssistantId = [...floorsRef.current].reverse().find((x) => x.role === 'assistant')?.id ?? null;
     const myGen = genRef.current;
@@ -1780,14 +1796,14 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     const userKey = 'u' + Date.now();
     const asgKey = 'a' + Date.now();
     setFloors((prev) => [...prev,
-      { key: userKey, role: 'user', content: msg, variantsCount: 1, activeVariant: 0, report: {} },
+      { key: userKey, role: 'user', content: wire, variantsCount: 1, activeVariant: 0, report: {} },
       { key: asgKey, role: 'assistant', content: '', thinking: '', variantsCount: 1, activeVariant: 0, report: {}, streaming: true },
     ]);
     const ac = new AbortController();
     abortRef.current = ac;
     const turn = (async () => {
       let userSaved = false;
-      const outcome = await streamChat({ window_id: windowId, message: msg, channel: 'vps', model }, {
+      const outcome = await streamChat({ window_id: windowId, message: wire, channel: 'vps', model }, {
         onUserSaved: (id) => {
           userSaved = true;
           patchFloor(myGen, userKey, (f) => ({ ...f, id }));
@@ -1843,7 +1859,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
         if (!outcome.aborted && (!remote || bannerMsg !== outcome.error) && myGen === genRef.current) setDeskError(bannerMsg); // 主动暂停不算"出错",不吓到人
         if (myGen === genRef.current) {
           loadWindow(windowId, true, myGen).catch(() => {});
-          if (remote) watchRemoteTurn(myGen, windowId, { expect: { kind: 'send', msg, lastAssistantId } });
+          if (remote) watchRemoteTurn(myGen, windowId, { expect: { kind: 'send', floorText: wire, composerText: msg, lastAssistantId } });
           else if (outcome.busy || outcome.disconnected === 'before') watchRemoteTurn(myGen, windowId, { banner: outcome.busy ? bannerMsg : undefined });
           else if (outcome.aborted) watchRemoteTurn(myGen, windowId, { firstDelay: 1500 }); // 「停」万一没送到,电脑那边还在写,照样接回来
           else scheduleResync(myGen, windowId, 2500); // 真出错兜个延迟对账(ctx.waitUntil 可能还在跑)
@@ -4216,7 +4232,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           {!sending && remoteWriting && (
             <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">电脑那边还在写这一楼,写完会自己出现</div>
           )}
-          {/* 手机上折成两行:上一行 透视/纸条 两颗小钮,下一行 输入框铺满 + 发送;那颗空 span 是换行用的 */}
+          {/* 手机上折成两行:上一行 透视/纸条/桌边 三颗小钮,下一行 输入框铺满 + 发送;那颗空 span 是换行用的 */}
           <div className="max-w-2xl mx-auto flex items-end gap-2.5 flex-wrap max-[700px]:gap-2">
             <button
               onClick={doDryrun}
@@ -4232,10 +4248,21 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
             <button
               onClick={toggleNoteDrawer}
               title="导演小纸条：给下一楼的临时指令"
-              className="desk-pill serc relative rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs max-[700px]:mr-auto"
+              className="desk-pill serc relative rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs"
             >
               纸条
               {win?.note?.trim() && <span className="absolute top-1.5 right-1.5 w-[6px] h-[6px] rounded-full bg-accent" />}
+            </button>
+            {/* 桌边钮:亮着时说的话是桌边话(场外话:不进时光带、不进状态板、导出正文默认不收)。手机上它是第一行最后一颗,
+                mr-auto 从纸条挪到这里,把输入框挤到下一行的那颗空 span 照旧。 */}
+            <button
+              onClick={toggleAside}
+              disabled={!curWindowId}
+              aria-pressed={asideOn}
+              title={asideOn ? '桌边话:亮着。再点一下回到正文' : '桌边话:点亮以后说的话是场外话,不进正文'}
+              className={`desk-pill serc rounded-[18px] border text-sm w-12 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs max-[700px]:mr-auto ${asideOn ? 'bg-accent border-accent text-white hover:brightness-105' : 'bg-card border-line-soft text-ink-body hover:brightness-[.97]'}`}
+            >
+              桌边
             </button>
             <span aria-hidden className="hidden max-[700px]:block max-[700px]:order-2 max-[700px]:basis-full max-[700px]:h-0" />
             {/* 这层relative容器专给@候选下拉当锚点——只裹textarea本体(flex-1从textarea挪到这层容器上,
@@ -4280,7 +4307,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 onKeyDown={onComposerKeyDownAt}
                 onBlur={() => setAtMenuOpen(false)}
                 rows={1}
-                placeholder="接着写点什么…"
+                placeholder={asideOn ? '桌边说话…' : '接着写点什么…'}
                 // block:textarea 默认是行内块,坐在基线上,底下会多出一截字母下伸的空隙(量过:8px),
                 // 整条输入行 items-end 对齐的是那个空隙的底,输入框本体就比发送钮浮高一截——她说的「没对齐」。
                 // 手机上行高 24 + 上下各 10 + 边 2 = 46,跟发送钮同高。
