@@ -18,6 +18,7 @@
 | 010-手机气泡段距输入框菜单 | 10-12 她在手机上过了一遍报的 | `frontend/app/study/page.tsx`(她的楼改回靠右小气泡、段距 0.7em)、`frontend/app/study/TypingDesk.tsx`(正文按空行切段 splitParagraphs、输入框 display:block 跟发送钮同高)、`frontend/app/globals.css`(只写标准 backdrop-filter——手写 -webkit- 前缀会让 lightningcss 把不带前缀的丢掉、安卓上没糊;⋯菜单铺实底卡片色不靠糊) |
 | 011-掉线不丢楼 | 10-12 她撞「network error」 | 新增 `src/chat/deskTurns.ts`(哪扇窗正在写)、`src/chat/desk.ts`(手机断开只是不再往手机上写,模型照写照存;只有「停」abort;一扇窗一次一楼,409;帧不等手机收;15 秒心跳)、`examples/cloudflare/index.ts`(`POST /desk/stop`、`GET /desk/running`)、`frontend/app/study/TypingDesk.tsx`(半路断线不贴错误,盯着「还在写吗」接回整楼;进窗也问;暂停先发「停」) |
 | 012-桌边钮 | 10-12 她点的 | `frontend/app/study/TypingDesk.tsx`(纸条旁边「桌边」钮,亮着发送时安上「桌边：」,亮灭按窗记本机)、`frontend/app/globals.css`(玻璃模式下按下的小钮铺强调色) |
+| 013-气泡液态玻璃 | 10-12 她点的 | `frontend/app/globals.css`(玻璃模式下她的气泡:拿掉整圈白边,半透明底 + 斜光 + 只在左上右下渐隐的 1px 高光环) |
 
 007 说明:施工单四.5 写的是 ChaptersStudio「从楼层收章节的地方」,但 16b7abd 的 ChaptersStudio
 没有从楼层收章节的入口(章节是手填的),楼层变成稿子只有打字桌 ⋯ 菜单「导出正文」这一条路,

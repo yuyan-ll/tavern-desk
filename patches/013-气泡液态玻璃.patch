@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 19:51:19 +0000
+Subject: [PATCH] frontend: 玻璃模式下她的气泡改成液态玻璃,去掉那圈白边
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:她说玻璃模式下自己的气泡有一圈白边不好看,要液态玻璃的样子。原来是 1px 七成白的整圈边框,
+米纸底上就是一道白线圈。
+- globals.css:.floor-user 拿掉边框;底色换成更透的 42% 气泡色,上面叠一层 155° 斜光(--g-hi 的 38%,
+  到一半就淡没);::before 用遮罩只画 1px 的环,环上是 135° 渐变,只在左上、右下有光、中间大半截透明,
+  不成圈;内阴影上一道细高光、下沿一点暖色,外投影托出厚度。高光都跟着 --g-hi 走,暗色墙纸自动收淡。
+  遮罩只写标准属性,前缀交给构建补(构建产物里 -webkit-mask/-webkit-mask-composite 和标准写法都在)。
+  只动 html[data-glass="1"] 下的规则,不开玻璃时不变。
+---
+ frontend/app/globals.css | 28 ++++++++++++++++++++++++----
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/frontend/app/globals.css b/frontend/app/globals.css
+index 4fe4dcd..596c7d1 100644
+--- a/frontend/app/globals.css
++++ b/frontend/app/globals.css
+@@ -247,11 +247,31 @@ html[data-glass="1"] .desk-pill[aria-pressed="true"] {
+ html[data-glass="1"] .chat-inputbar .desk-send {
+   box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+ }
++/* 她的气泡:液态玻璃。原来一圈 1px 七成白的边框,米纸底上看着就是一道白线圈(她说不好看)——
++   边框拿掉,改成:半透明的底 + 一层斜着的光泽,边缘只在左上、右下各留一道渐隐的高光(::before 用
++   遮罩只画 1px 的环,环上的颜色是渐变,大半截是透明的,所以不成圈),再加一点内阴影和外投影托出厚度。
++   高光颜色跟着 --g-hi 走,暗色墙纸自动收淡。遮罩只写标准属性,前缀交给构建去补(同 backdrop-filter 那条)。 */
+ html[data-glass="1"] .floor-user {
+-  background: color-mix(in srgb, var(--scale-1) 55%, transparent) !important;
+-  border: 1px solid var(--g-rim);
+-  backdrop-filter: blur(14px) saturate(160%);
+-  box-shadow: inset 0 1px 0 var(--g-hi), 0 4px 14px var(--g-shadow);
++  position: relative;
++  background:
++    linear-gradient(155deg, color-mix(in srgb, var(--g-hi) 38%, transparent) 0%, transparent 46%),
++    color-mix(in srgb, var(--scale-1) 42%, transparent) !important;
++  border: 0;
++  backdrop-filter: blur(20px) saturate(180%);
++  box-shadow:
++    inset 0 1px 1.5px color-mix(in srgb, var(--g-hi) 55%, transparent),
++    inset 0 -6px 12px -8px color-mix(in srgb, var(--scale-3) 22%, transparent),
++    0 6px 18px var(--g-shadow);
++}
++html[data-glass="1"] .floor-user::before {
++  content: '';
++  position: absolute;
++  inset: 0;
++  border-radius: inherit;
++  padding: 1px;
++  background: linear-gradient(135deg, var(--g-hi) 0%, transparent 32%, transparent 68%, color-mix(in srgb, var(--g-hi) 45%, transparent) 100%);
++  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
++  pointer-events: none;
+ }
+ html[data-glass="1"] .card {
+   background: var(--g-card) !important;
