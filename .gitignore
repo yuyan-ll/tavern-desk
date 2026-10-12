@@ -3,6 +3,7 @@ host/config.json
 host/segments.home.mjs
 host/*.key
 host/*.txt
+host/data/
 
 # 本机 SQLite 数据库(含 -wal / -shm)
 *.sqlite

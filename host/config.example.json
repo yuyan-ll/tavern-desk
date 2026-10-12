@@ -1,0 +1,14 @@
+{
+  "port": 3889,
+  "dbPath": "./data/desk.sqlite",
+  "apiKeyFile": "./anthropic.key",
+  "anthropicBaseUrl": "",
+  "authToken": "",
+  "ownerToken": "",
+  "companionToken": "",
+  "companionCommentWrite": false,
+  "allowedOrigins": [],
+  "defaultModel": "",
+  "segmentsModule": "",
+  "fakeModel": false
+}
