@@ -1348,7 +1348,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     setCurWindowId(id);
     curWindowIdRef.current = id;
     setWin(null); setFloors([]); setWinLoadError('');
-    setTimelineOpen(false); setNoteOpen(false); setBoardOpen(false); setDryrunOpen(false);
+    setTimelineOpen(false); setNoteOpen(false); setBoardOpen(false); setDryrunOpen(false); setCoauthorOpen(false);
     // 切窗后在飞透视的 finally 被窗口双证正确跳过——所以
     // 翻篇入口自己负责杀令牌+复位 dryrun 全套,否则 dryrunLoading 卡 true,新窗的透视被重入闸
     // 永久拦死(直到整组件重挂载)。
@@ -1405,6 +1405,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     // 不然下次进任何窗透视都被卡死的 dryrunLoading 拦住。
     dryrunSeqRef.current++;
     setDryrunOpen(false); setDryrunLoading(false); setDryrunReport(null); setDryrunError('');
+    setCoauthorOpen(false);
     setMode('list');
     setCurWindowId(null);
     curWindowIdRef.current = null;
@@ -2542,6 +2543,53 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     }
   }
 
+  // ── 👤 合写者:她在这扇窗里扮演谁 ──
+  // 名字落窗口变量 vars.user(预设里的 {{user}} 都换成它;不填就是后端兜底的「你」),设定落
+  // vars.persona_description(预设「合写者的角色」那一格,见 chat/deskAssemble.ts)。后端早就认这两个键,
+  // 只是界面上没处填,那一格一直是空的,防抢话那几条规矩里的 {{user}} 也只剩一个跟模型自己撞名的「你」。
+  // 做成盖在最上层的小窗,不进纸条/时光带/状态板/世界书那个共用槽位,不用跟它们互相问草稿。
+  const [coauthorOpen, setCoauthorOpen] = useState(false);
+  const [coauthorName, setCoauthorName] = useState('');
+  const [coauthorDesc, setCoauthorDesc] = useState('');
+  const [coauthorSaving, setCoauthorSaving] = useState(false);
+  const [coauthorError, setCoauthorError] = useState('');
+  function openCoauthor() {
+    if (!win) return;
+    setCoauthorName(String(win.vars?.user || ''));
+    setCoauthorDesc(String(win.vars?.persona_description || ''));
+    setCoauthorError('');
+    setCoauthorOpen(true);
+  }
+  async function saveCoauthor() {
+    if (!curWindowId || coauthorSaving) return;
+    const savedWindowId = curWindowId;
+    const myGen = genRef.current;
+    setCoauthorSaving(true); setCoauthorError('');
+    try {
+      // vars 是整块覆盖写:先拿服务端那份再改这两个键,别的键(预设用的变量等)原样带回去,
+      // 不拿手上可能过期的 win.vars 去冲。
+      const cur = await fetch(`${base}/api/oc/desk/windows/${savedWindowId}`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
+      if (!cur || cur.success !== true) throw new Error(cur?.error || '读不到这扇窗');
+      const vars: Record<string, unknown> = cur.window?.vars && typeof cur.window.vars === 'object' && !Array.isArray(cur.window.vars) ? { ...cur.window.vars } : {};
+      const name = coauthorName.trim();
+      const desc = coauthorDesc.trim();
+      if (name) vars.user = name; else delete vars.user;
+      if (desc) vars.persona_description = desc; else delete vars.persona_description;
+      const res = await fetch(`${base}/api/oc/desk/windows/${savedWindowId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json().catch(() => null);
+      if (!d || d.success !== true) throw new Error(d?.error || '保存失败(服务端没确认成功)');
+      if (curWindowIdRef.current === savedWindowId && genRef.current === myGen) {
+        setWin((w) => (w ? { ...w, vars } : w));
+        setCoauthorOpen(false);
+      }
+    } catch (e: unknown) {
+      if (curWindowIdRef.current === savedWindowId && genRef.current === myGen) {
+        setCoauthorError(e instanceof Error ? e.message : '保存失败');
+      }
+    } finally { setCoauthorSaving(false); }
+  }
+
   // ── 📝 导演小纸条抽屉 ──
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
@@ -3494,6 +3542,14 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                         <div className="my-1 border-t border-line-soft" />
                       </div>
                       <button
+                        onClick={() => { setMenuOpen(false); openCoauthor(); }}
+                        disabled={!win}
+                        className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body disabled:opacity-40"
+                      >
+                        <span className="shrink-0">👤 合写者</span>
+                        {win?.vars?.user ? <span className="min-w-0 truncate text-xs text-ink2">{String(win.vars.user)}</span> : null}
+                      </button>
+                      <button
                         onClick={() => doExport()}
                         disabled={sending}
                         className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body disabled:opacity-40"
@@ -4221,6 +4277,43 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
         )}
 
         {/* 📖 收进章节草稿弹窗已整个拆除,不单独收一段原文进草稿箱——不留死代码。 */}
+
+        {/* 👤 合写者小窗:直接挂到 body 上——头栏、底栏在玻璃模式下带 backdrop-filter,fixed 的子元素会被它们
+            圈住,挂在里头就盖不全。点外面不关(写了一半的设定别一碰就没),只认「取消」「保存」。 */}
+        {coauthorOpen && typeof document !== 'undefined' && createPortal((
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 px-4" role="dialog" aria-modal="true" aria-label="合写者">
+            <div className="w-full max-w-lg max-h-[85dvh] overflow-y-auto rounded-3xl border border-line-soft bg-card shadow-lg px-5 py-5">
+              <div className="serc text-base text-ink-deep">合写者</div>
+              <div className="text-[11.5px] text-ink2 mt-1 leading-relaxed">
+                你在这扇窗里扮演谁。名字会填进预设里所有的 {'{{user}}'},设定放进「合写者的角色」那一格。下一楼起生效,只管这一扇窗。
+              </div>
+              <div className="text-xs text-ink2 mt-4 mb-1.5">名字</div>
+              <input
+                value={coauthorName}
+                onChange={(e) => setCoauthorName(e.target.value)}
+                placeholder="比如:小宴(不填,预设里就叫你「你」)"
+                className="w-full rounded-2xl border border-line-soft bg-page px-4 py-2.5 text-sm text-ink-body focus:outline-none focus:border-accent"
+              />
+              <div className="text-xs text-ink2 mt-3 mb-1.5">设定</div>
+              <textarea
+                value={coauthorDesc}
+                onChange={(e) => setCoauthorDesc(e.target.value)}
+                placeholder="外貌、性格、习惯……写你想让他知道的"
+                rows={7}
+                className="w-full resize-y rounded-2xl border border-line-soft bg-page px-4 py-3 text-sm text-ink-body leading-relaxed focus:outline-none focus:border-accent"
+              />
+              <div className="flex items-center gap-3 mt-3">
+                {coauthorError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{coauthorError}</span>}
+                <div className="ml-auto flex items-center gap-3">
+                  <button onClick={() => setCoauthorOpen(false)} disabled={coauthorSaving} className="text-xs text-ink2 hover:text-ink-body px-2 py-1.5">取消</button>
+                  <button onClick={saveCoauthor} disabled={coauthorSaving} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-5 py-2 disabled:opacity-40">
+                    {coauthorSaving ? '保存中…' : '保存'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ), document.body)}
 
         {/* 底栏 portal 进壳的底槽(见 studyShell.tsx)。 */}
         {bottomEl && createPortal((
