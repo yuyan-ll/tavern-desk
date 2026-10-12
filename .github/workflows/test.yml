@@ -1,0 +1,54 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            upstream/package-lock.json
+            upstream/frontend/package-lock.json
+
+      # patches/ 必须能在钉住的上游提交上原样重放出 upstream/——两边对不上就是有人改了 upstream/ 没出 patch。
+      - name: patches 重放上游 16b7abd 等于 upstream/
+        run: |
+          git clone --quiet https://github.com/TricksterFlare/tavern-study "$RUNNER_TEMP/pristine"
+          git -C "$RUNNER_TEMP/pristine" checkout --quiet 16b7abda87b84a470be35db6f504e2ba88d1fdc3
+          git -C "$RUNNER_TEMP/pristine" -c user.name=ci -c user.email=ci@localhost am --quiet "$GITHUB_WORKSPACE"/patches/*.patch
+          diff -r --exclude=.git "$RUNNER_TEMP/pristine" upstream
+
+      - name: upstream npm ci
+        working-directory: upstream
+        run: npm ci
+
+      - name: upstream typecheck
+        working-directory: upstream
+        run: npm run typecheck
+
+      - name: upstream npm test
+        working-directory: upstream
+        run: npm test
+
+      - name: host 测试(壳、桥、注入、桌边话)
+        run: node --test host/tests/*.test.ts
+
+      - name: 前端能编过(静态导出,不配 NEXT_PUBLIC_*)
+        working-directory: upstream/frontend
+        run: |
+          npm ci
+          npm run build
+          test -f out/index.html
+          # 包里不该有编译期写死的地址/口令
+          if grep -rl "your-worker.example" out/; then echo "前端包里写死了地址"; exit 1; fi

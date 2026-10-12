@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 07:34:41 +0000
+Subject: [PATCH] desk: 时光带折叠先滤掉桌边楼
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:桌边话是场外话,不该被压进剧情摘要。选折叠批次前先把桌边楼滤掉,折叠正文也就不含
+它们;游标照常越过夹在中间的桌边楼(算"已处理",只是不进摘要)。
+
+- chat/deskTimeline.ts:折叠查询带上 report 列;selectDeskTimelineFoldBatch 先滤桌边楼。
+- core/deskTimelineFold.ts:同名纯函数同口径(TavernStudyHost.foldDeskTimeline 用它)。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019oTHfvAo5JtNUTTEatrjJ6
+---
+ src/chat/deskTimeline.ts     | 8 ++++++--
+ src/core/deskTimelineFold.ts | 8 +++++++-
+ 2 files changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/src/chat/deskTimeline.ts b/src/chat/deskTimeline.ts
+index 0a3ce6f..7a4c810 100644
+--- a/src/chat/deskTimeline.ts
++++ b/src/chat/deskTimeline.ts
+@@ -12,6 +12,7 @@
+ import { makeD1UsageSink } from '../storage/usageSink.ts';
+ import { completeText, type CompleteTextUsage } from './modelBackend.ts';
+ import { DESK_TIMELINE_KEEP } from '../core/deskLimits.ts';
++import { isDeskAsideFloor } from '../core/deskAside.ts';
+ export { DESK_TIMELINE_KEEP } from '../core/deskLimits.ts';
+ 
+ interface DeskTimelineEnv {
+@@ -100,7 +101,10 @@ export function extractDeskTimelineAssistantBody(raw: unknown): string {
+ // 那条尚未得到回复的尾楼，就不能让 cutoff 越过去。生成失败留下的早期孤儿 user 不构成永久路障：
+ // 正常 UI 的“孤儿楼重发”会先删掉它；裸 API/历史异常若形成 user/user…assistant，后面的 assistant
+ // 才是已经落库的剧情正本，允许连同此前输入一起越线。终点始终钉在候选范围内最后一条 assistant。
+-export function selectDeskTimelineFoldBatch<T extends { role?: unknown }>(candidate: T[]): T[] {
++export function selectDeskTimelineFoldBatch<T extends { role?: unknown; report?: unknown }>(all: T[]): T[] {
++  // 桌边话(core/deskAside.ts)不进时光带:选批次前先滤掉,折叠正文自然也不含它们。游标照常越过
++  // 夹在中间的桌边楼(算"已处理",只是不进摘要);终点仍钉在最后一条非桌边的 assistant 上。
++  const candidate = all.filter((floor) => !isDeskAsideFloor(floor));
+   let lastSafe = -1;
+   for (let i = 0; i < candidate.length; i++) {
+     const role = candidate[i]?.role;
+@@ -307,7 +311,7 @@ export async function maybeFoldDeskTimeline(
+     const binds = cutoff ? [cutoff.t, cutoff.t, cutoff.id] : [];
+     const tail = (
+       await env.OC_DB.prepare(
+-        `SELECT id, role, content, created_at FROM desk_floors WHERE window_id = ? AND content != ''${cond} ORDER BY created_at ASC, id ASC`
++        `SELECT id, role, content, report, created_at FROM desk_floors WHERE window_id = ? AND content != ''${cond} ORDER BY created_at ASC, id ASC`
+       ).bind(windowId, ...binds).all<any>()
+     ).results as any[];
+ 
+diff --git a/src/core/deskTimelineFold.ts b/src/core/deskTimelineFold.ts
+index 42d42d7..90c4942 100644
+--- a/src/core/deskTimelineFold.ts
++++ b/src/core/deskTimelineFold.ts
+@@ -2,11 +2,17 @@
+ // desk-timeline module so TavernStudyHost.foldDeskTimeline can share the exact same batch
+ // selection semantics without depending on any storage/model transport.
+ 
++import { isDeskAsideFloor } from './deskAside.ts';
++
+ // Summarization must never end on a dangling user turn (a request the assistant has not yet
+ // answered): trim the candidate batch back to the last assistant floor it contains. Orphaned
+ // leading user floors ahead of that point still count (see production comment this mirrors) —
+ // they are folded together with the assistant floor that answers them.
+-export function selectDeskTimelineFoldBatch<T extends { role?: unknown }>(candidate: T[]): T[] {
++// Table-side asides (see deskAside.ts) never enter the timeline: they are dropped before the batch
++// is picked, so the summary never sees them, while the cursor still moves past any aside floors
++// that sit before the batch's last assistant floor.
++export function selectDeskTimelineFoldBatch<T extends { role?: unknown; report?: unknown }>(all: T[]): T[] {
++  const candidate = all.filter((floor) => !isDeskAsideFloor(floor));
+   let lastSafe = -1;
+   for (let index = 0; index < candidate.length; index++) {
+     const role = candidate[index]?.role;

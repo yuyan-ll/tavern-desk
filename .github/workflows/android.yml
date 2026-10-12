@@ -1,0 +1,45 @@
+name: android
+
+# push 到 main:编 debug apk、传 artifact、发 Release desk-v<run_number> 挂上 app-debug.apk。
+# 其它分支的 push 只编、只传 artifact,不发 Release(合进 main 之前先确认能编过)。
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 编 debug apk
+        working-directory: app
+        run: ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: 发 Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desk-v${{ github.run_number }}
+          name: 打字桌 desk-v${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            打字桌安卓壳 debug 包(签名用仓库里的 app/debug.keystore,能直接覆盖安装旧版)。
+            手机上点下面的 app-debug.apk 下载安装;第一次打开填书房的 https 地址。
+          files: app/build/outputs/apk/debug/app-debug.apk

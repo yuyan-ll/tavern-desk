@@ -1,0 +1,205 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 07:41:57 +0000
+Subject: [PATCH] frontend: 不把地址和口令编进包里——地址取页面
+ origin,口令首次打开输一次
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:自托管时书房和 API 由同一个宿主进程托管,包里写死地址/口令既不必要也不安全(口令会
+跟着静态包到处走);手机壳里也只填地址,口令在页面里输。
+
+- NEXT_PUBLIC_WORKER_URL / NEXT_PUBLIC_AUTH_TOKEN 配了任何一个:跟上游完全一样。
+- 都没配:新文件 study/tokenGate.tsx 在水合后取 window.location.origin 和
+  localStorage['tavern-desk.token'];取到之前显示等待;没有口令就显示只有一个输入框的「输入口令」,
+  先拿 /{口令}/api/oc/stats 验过再存;存着的口令失效(401)自动清掉回输入页。
+- 左廊加「换口令」(只在自托管模式出现),清掉口令回输入页;走打字桌同一道离窗闸。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019oTHfvAo5JtNUTTEatrjJ6
+---
+ frontend/app/study/page.tsx      |  19 +++++
+ frontend/app/study/tokenGate.tsx | 129 +++++++++++++++++++++++++++++++
+ 2 files changed, 148 insertions(+)
+ create mode 100644 upstream/frontend/app/study/tokenGate.tsx
+
+diff --git a/frontend/app/study/page.tsx b/frontend/app/study/page.tsx
+index 276d537..7feeca6 100644
+--- a/frontend/app/study/page.tsx
++++ b/frontend/app/study/page.tsx
+@@ -13,6 +13,7 @@ import {
+   type LoreTriggerValue, type LorePosition, type CharacterFields,
+ } from './LoreTriggerFields';
+ import { StudyShellProvider } from './studyShell';
++import { DeskTokenGate } from './tokenGate';
+ 
+ // ── 数据形状(按后端契约来,字段名不许自己发明) ──
+ type Stats = { by_category: Record<string, number>; by_project: Record<string, number>; total: number };
+@@ -201,6 +202,13 @@ html.sty-lock-scroll, html.sty-lock-scroll body { overflow: hidden; }
+ export default function StudyPage() {
+   const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL;
+   const token = process.env.NEXT_PUBLIC_AUTH_TOKEN;
++  // 两个环境变量配了任何一个:跟原来完全一样(编译期写死)。都没配(自托管构建):地址取页面自己的
++  // origin、口令首次打开时输一次存浏览器,取到之前显示等待——见 tokenGate.tsx。
++  if (workerUrl || token) return <StudyRoom workerUrl={workerUrl} token={token} />;
++  return <DeskTokenGate>{(origin, saved, forget) => <StudyRoom workerUrl={origin} token={saved} onForgetToken={forget} />}</DeskTokenGate>;
++}
++
++function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; token?: string; onForgetToken?: () => void }) {
+   const base = `${workerUrl}/${token}`;
+   const envOk = !!workerUrl && !!token;
+ 
+@@ -755,6 +763,17 @@ export default function StudyPage() {
+               );
+             })}
+           </div>
++          {onForgetToken && (
++            <button
++              type="button"
++              className="serc sty-rail-btn"
++              style={{ border: 0, marginTop: 'auto', color: 'var(--ink2)' }}
++              title="清掉存在这台设备上的口令,重新输入"
++              onClick={() => { if (view === 'desk' && typingDeskRef.current && !typingDeskRef.current.requestLeave()) return; onForgetToken(); }}
++            >
++              <span className="sty-rail-glyph">⚿</span><span className="sty-rail-label">换口令</span>
++            </button>
++          )}
+         </nav>
+ 
+         <div className="sty-main">
+diff --git a/frontend/app/study/tokenGate.tsx b/frontend/app/study/tokenGate.tsx
+new file mode 100644
+index 0000000..ac6410d
+--- /dev/null
++++ b/frontend/app/study/tokenGate.tsx
+@@ -0,0 +1,129 @@
++'use client';
++
++// 自托管口令门(tavern-desk 用):NEXT_PUBLIC_WORKER_URL / NEXT_PUBLIC_AUTH_TOKEN 都没配时,
++// 地址不编进包里——取页面自己的 origin(书房和 API 由同一个宿主进程托管);口令第一次打开时输入一次,
++// 存在这台设备的浏览器里(localStorage['tavern-desk.token']),刷新即用。左廊「换口令」把它清掉。
++//
++// 静态导出的首屏是预渲染的,那时没有 window——origin 和口令都走 useSyncExternalStore,服务端快照是
++// "还不知道",水合之后才取到真值;取到之前只显示等待。
++// 口令先拿 GET /{口令}/api/oc/stats 验一下再存:401 就是不对,当场说;存着的口令后来失效(宿主换了口令)
++// 也是同一道验,失效就清掉回到输入页。
++
++import { useCallback, useEffect, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react';
++
++export const DESK_TOKEN_KEY = 'tavern-desk.token';
++
++type Check = 'ok' | 'bad' | 'offline';
++
++async function checkToken(origin: string, token: string): Promise<Check> {
++  try {
++    const res = await fetch(`${origin}/${encodeURIComponent(token)}/api/oc/stats`, { cache: 'no-store' });
++    if (res.status === 401) return 'bad';
++    return res.ok ? 'ok' : 'offline';
++  } catch {
++    return 'offline';
++  }
++}
++
++// ── 口令存储:localStorage + 本页内的变更通知(别的标签页改了走 storage 事件)──
++const listeners = new Set<() => void>();
++function subscribeToken(onChange: () => void) {
++  listeners.add(onChange);
++  window.addEventListener('storage', onChange);
++  return () => { listeners.delete(onChange); window.removeEventListener('storage', onChange); };
++}
++function readSaved(): string {
++  try { return localStorage.getItem(DESK_TOKEN_KEY) || ''; } catch { return memoryToken; }
++}
++let memoryToken = ''; // localStorage 不可用(隐私模式等)时,只在这一次打开里有效
++function writeSaved(token: string) {
++  memoryToken = token;
++  try {
++    if (token) localStorage.setItem(DESK_TOKEN_KEY, token);
++    else localStorage.removeItem(DESK_TOKEN_KEY);
++  } catch { /* 见 memoryToken */ }
++  for (const l of listeners) l();
++}
++const noopSubscribe = () => () => {};
++
++const shellStyle: React.CSSProperties = {
++  minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center',
++  padding: 24, boxSizing: 'border-box', background: 'var(--page-bg)', fontFamily: 'var(--font-sans)',
++};
++
++export function DeskTokenGate({ children }: { children: (origin: string, token: string, forget: () => void) => ReactNode }) {
++  const origin = useSyncExternalStore(noopSubscribe, () => window.location.origin, () => null);
++  const saved = useSyncExternalStore(subscribeToken, readSaved, () => null);
++  const [draft, setDraft] = useState('');
++  const [checking, setChecking] = useState(false);
++  const [error, setError] = useState('');
++
++  // 存着的口令后台验一下;断网不算失效(手机进电梯也照样能先看到页面),只有 401 才清。
++  useEffect(() => {
++    if (!origin || !saved) return;
++    let alive = true;
++    checkToken(origin, saved).then((r) => {
++      if (!alive || r !== 'bad') return;
++      setError('口令变了,重新输入一次');
++      writeSaved('');
++    });
++    return () => { alive = false; };
++  }, [origin, saved]);
++
++  const forget = useCallback(() => { setDraft(''); setError(''); writeSaved(''); }, []);
++
++  async function submit(e: FormEvent) {
++    e.preventDefault();
++    const token = draft.trim();
++    if (!origin || !token || checking) return;
++    setChecking(true);
++    const r = await checkToken(origin, token);
++    setChecking(false);
++    if (r === 'ok') { setDraft(''); setError(''); writeSaved(token); }
++    else setError(r === 'bad' ? '口令不对' : '连不上书房,检查一下网络或地址');
++  }
++
++  if (origin === null || saved === null) {
++    return (
++      <div style={shellStyle}>
++        <div className="serc" style={{ color: 'var(--ink2)', fontSize: 14 }}>正在打开书房…</div>
++      </div>
++    );
++  }
++
++  if (saved) return <>{children(origin, encodeURIComponent(saved), forget)}</>;
++
++  return (
++    <div style={shellStyle}>
++      <form onSubmit={submit} style={{ width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 14 }}>
++        <label htmlFor="desk-token" className="serc" style={{ fontSize: 22, color: 'var(--ink-deep)', textAlign: 'center' }}>输入口令</label>
++        <input
++          id="desk-token"
++          type="password"
++          autoFocus
++          autoComplete="current-password"
++          enterKeyHint="go"
++          value={draft}
++          onChange={(e) => setDraft(e.target.value)}
++          disabled={checking}
++          style={{
++            width: '100%', boxSizing: 'border-box', padding: '12px 14px', fontSize: 16,
++            borderRadius: 12, border: '1px solid var(--line-soft)', background: 'var(--card-bg)', color: 'var(--ink-deep)',
++          }}
++        />
++        <button
++          type="submit"
++          className="serc"
++          disabled={checking || !draft.trim()}
++          style={{
++            padding: '11px 14px', fontSize: 15, borderRadius: 12, border: 0, cursor: 'pointer',
++            background: 'var(--accent)', color: 'var(--card-bg)', opacity: checking || !draft.trim() ? 0.5 : 1,
++          }}
++        >
++          {checking ? '核对中…' : '进书房'}
++        </button>
++        <div role="alert" style={{ minHeight: 20, fontSize: 13, color: 'var(--ink2)', textAlign: 'center' }}>{error}</div>
++      </form>
++    </div>
++  );
++}

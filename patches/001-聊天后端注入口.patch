@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 07:31:23 +0000
+Subject: [PATCH] desk: 聊天模型后端可由宿主注入(env.DESK_BACKEND)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:自托管宿主要在每楼 system 段最前面垫自己的段,再调原来的 Anthropic 流式适配器;
+这是上游唯一一处为注入口做的改动。不给 DESK_BACKEND 时行为与上游完全一致。
+
+时光带折叠、状态板重算走 completeText(src/chat/modelBackend.ts),不经过这里,不垫段。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019oTHfvAo5JtNUTTEatrjJ6
+---
+ src/chat/desk.ts | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/chat/desk.ts b/src/chat/desk.ts
+index 36c02ff..dbe52db 100644
+--- a/src/chat/desk.ts
++++ b/src/chat/desk.ts
+@@ -22,6 +22,7 @@ import type { Ai, VectorizeIndex } from '../storage/vectorize';
+ import { parseStateBoard as parseCoreStateBoard, STATEBOARD_MAX_BYTES as CORE_STATEBOARD_MAX_BYTES, stateBoardGateErrors } from '../core/stateBoard.ts';
+ import type { DeskAssetStorage, DeskStorage, DeskStoryStorage, DeskTurnStorage, SemanticSearchAdapter } from '../core/storage.ts';
+ import { AnthropicStreamBackend } from '../adapters/streamModelBackends.ts';
++import type { ModelBackend } from '../core/modelBackend.ts';
+ import { validateDeskChannelConfig } from '../core/deskChannelConfig.ts';
+ import { DEFAULT_THINKING_TAGS } from '../tools/deskThinkingTags.ts';
+ 
+@@ -31,6 +32,7 @@ interface DeskChatEnv {
+   AI: Ai;
+   ANTHROPIC_API_KEY: string;
+   ANTHROPIC_BASE_URL?: string; // 可选:Anthropic 兼容网关的完整 Messages 端点 URL;校验在 AnthropicStreamBackend 的 safeEndpoint
++  DESK_BACKEND?: ModelBackend; // 可选:宿主注入的聊天模型后端(自托管时垫 system 段用);不给就照旧直连 Anthropic
+   [k: string]: any;
+ }
+ 
+@@ -410,7 +412,7 @@ export async function handleDeskChat(
+     const controller = new AbortController();
+     const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
+     if (signal?.aborted) controller.abort();
+-    const backend = new AnthropicStreamBackend({ apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, userId: USER_ID });
++    const backend = env.DESK_BACKEND ?? new AnthropicStreamBackend({ apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, userId: USER_ID });
+     let failed = false;
+     const result = await backend.streamChat({ system: systemBlocks, prompt: tail, model, signal: controller.signal, thinkingTags, onEvent: async (event) => {
+       if (clientGone) { controller.abort(); return; }

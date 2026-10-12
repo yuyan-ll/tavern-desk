@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 一张书桌上一页纸:简单的矢量图标,不带外部素材。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF" android:pathData="M38,30h32a4,4 0,0 1,4 4v28a4,4 0,0 1,-4 4h-32a4,4 0,0 1,-4 -4v-28a4,4 0,0 1,4 -4z" />
+    <path android:fillColor="#6F9E4A" android:pathData="M42,38h24v3h-24zM42,45h24v3h-24zM42,52h16v3h-16z" />
+    <path android:fillColor="#46662C" android:pathData="M26,70h56v6h-56zM32,76h6v10h-6zM70,76h6v10h-6z" />
+</vector>
