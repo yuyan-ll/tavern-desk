@@ -321,8 +321,9 @@ export async function handleDeskChat(
     const now = new Date().toISOString();
     // 协议闸(判据与设计取舍见 core/stateBoard.ts stateBoardGateErrors 头注释):缺协议键/丢输入键/
     // 协议键错形状,任一中招整板弃用。基线=effectiveStateBoard(normal=窗口当前板,roll=roll快照板)。
-    const boardGateErrors = board !== null ? stateBoardGateErrors(effectiveStateBoard, board) : [];
-    const boardUsable = board !== null && boardGateErrors.length === 0;
+    // 桌边话不进状态板:回楼就算带了板也只从正文里剥掉、不采用,本轮输入板原样带过去(不算 stale,也不补算)。
+    const boardGateErrors = board !== null && !aside ? stateBoardGateErrors(effectiveStateBoard, board) : [];
+    const boardUsable = !aside && board !== null && boardGateErrors.length === 0;
     // appliedBoard 是本轮实际生效板：解析成功且过协议闸用新板，否则继承装配输入板。
     // report.boardAfter 与 window.state_board 必须使用同一值；stale 以 !boardUsable 判定(解析失败/被闸拒同一待遇)。
     const appliedBoard: Record<string, any> = boardUsable ? (board as Record<string, any>) : effectiveStateBoard;
@@ -331,7 +332,7 @@ export async function handleDeskChat(
     const boardBeforeTrusted = mode === 'normal' || foundRollBoard;
     // stateBoardGateErrors 只在"解析成功但被闸拒"时落report,给前端说清弃用原因(纯解析失败仍走老文案)
     const hasUsage = !!usageActual && (usageActual.input + usageActual.output + usageActual.cache_read + usageActual.cache_write) > 0;
-    const reportOut = { ...report, stateBoardStale: !boardUsable, ...(boardGateErrors.length ? { stateBoardGateErrors: boardGateErrors } : {}), ...(boardBeforeTrusted ? { boardBefore: effectiveStateBoard } : {}), ...(hasUsage ? { usageActual } : {}), boardAfter: appliedBoard, ...(aside ? { aside: true } : {}) };
+    const reportOut = { ...report, stateBoardStale: !boardUsable && !aside, ...(boardGateErrors.length ? { stateBoardGateErrors: boardGateErrors } : {}), ...(boardBeforeTrusted ? { boardBefore: effectiveStateBoard } : {}), ...(hasUsage ? { usageActual } : {}), boardAfter: appliedBoard, ...(aside ? { aside: true } : {}) };
     let floorId = '';
     let floorCreatedAt = '';
     let committedReport: Record<string, unknown> | null = null;
@@ -382,7 +383,7 @@ export async function handleDeskChat(
     // 刚才 commitAssistantFloor/rollAssistantFloor 回填的 report,不在这里自己造。
     const commitToken = committedReport && typeof (committedReport as any).commitToken === 'string'
       ? (committedReport as any).commitToken as string : null;
-    if (!boardUsable && commitToken && windowUpdatedAtForAutoRefresh && content.trim() && Object.keys(effectiveStateBoard).length > 0) {
+    if (!aside && !boardUsable && commitToken && windowUpdatedAtForAutoRefresh && content.trim() && Object.keys(effectiveStateBoard).length > 0) {
       try {
         // 补算走摘要模型实测半分钟量级,done 会晚这么久——先给前端一条 status 免得像卡死
         await send({ type: 'status', text: '状态板正在按本楼正文补算一份，约半分钟…' });

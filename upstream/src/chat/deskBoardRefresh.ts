@@ -72,11 +72,12 @@ export async function deskBoardRefresh(env: DeskBoardRefreshEnv, windowId: strin
   if (!win) return { success: false, error: '这扇窗不存在' };
 
   // 最近一条 assistant 楼:后面跟着刚发出去、模型还没回的 user 楼也照样能刷(那种楼不当正文喂)。
-  // 排序口径同 chat/desk.ts 取 lastFloor(created_at DESC, id DESC)。
+  // 排序口径同 chat/desk.ts 取 lastFloor(created_at DESC, id DESC)。桌边楼(report.aside,见
+  // core/deskAside.ts)是场外话不是正文,跳过,往前找最近一条正常的模型楼。
   let floor: any;
   try {
     floor = await env.OC_DB
-      .prepare(`SELECT id, content FROM desk_floors WHERE window_id = ? AND role = 'assistant' ORDER BY created_at DESC, id DESC LIMIT 1`)
+      .prepare(`SELECT id, content FROM desk_floors WHERE window_id = ? AND role = 'assistant' AND CASE WHEN json_valid(report) THEN json_extract(report, '$.aside') IS NOT 1 ELSE 1 END ORDER BY created_at DESC, id DESC LIMIT 1`)
       .bind(windowId).first<any>();
   } catch (e: any) {
     return { success: false, error: e.message };
