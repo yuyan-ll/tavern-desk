@@ -22,6 +22,7 @@ import type { Ai, VectorizeIndex } from '../storage/vectorize';
 import { parseStateBoard as parseCoreStateBoard, STATEBOARD_MAX_BYTES as CORE_STATEBOARD_MAX_BYTES, stateBoardGateErrors } from '../core/stateBoard.ts';
 import type { DeskAssetStorage, DeskStorage, DeskStoryStorage, DeskTurnStorage, SemanticSearchAdapter } from '../core/storage.ts';
 import { AnthropicStreamBackend } from '../adapters/streamModelBackends.ts';
+import type { ModelBackend } from '../core/modelBackend.ts';
 import { validateDeskChannelConfig } from '../core/deskChannelConfig.ts';
 import { DEFAULT_THINKING_TAGS } from '../tools/deskThinkingTags.ts';
 
@@ -31,6 +32,7 @@ interface DeskChatEnv {
   AI: Ai;
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_BASE_URL?: string; // 可选:Anthropic 兼容网关的完整 Messages 端点 URL;校验在 AnthropicStreamBackend 的 safeEndpoint
+  DESK_BACKEND?: ModelBackend; // 可选:宿主注入的聊天模型后端(自托管时垫 system 段用);不给就照旧直连 Anthropic
   [k: string]: any;
 }
 
@@ -410,7 +412,7 @@ export async function handleDeskChat(
     const controller = new AbortController();
     const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) controller.abort();
-    const backend = new AnthropicStreamBackend({ apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, userId: USER_ID });
+    const backend = env.DESK_BACKEND ?? new AnthropicStreamBackend({ apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, userId: USER_ID });
     let failed = false;
     const result = await backend.streamChat({ system: systemBlocks, prompt: tail, model, signal: controller.signal, thinkingTags, onEvent: async (event) => {
       if (clientGone) { controller.abort(); return; }
