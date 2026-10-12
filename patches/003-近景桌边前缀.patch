@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 07:34:16 +0000
+Subject: [PATCH] desk: 近景里的桌边楼说话人前缀加「(桌边)」
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:桌边楼照常进近景(模型得知道刚才说了什么),但要让模型分得清哪几楼是场外话、
+不是小说正文。AssembleFloor 加可选 aside,chat/desk.ts 装配近景时按楼层标记带上。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019oTHfvAo5JtNUTTEatrjJ6
+---
+ src/chat/desk.ts         | 4 ++--
+ src/chat/deskAssemble.ts | 3 ++-
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/chat/desk.ts b/src/chat/desk.ts
+index 0e160a9..38b8242 100644
+--- a/src/chat/desk.ts
++++ b/src/chat/desk.ts
+@@ -232,7 +232,7 @@ export async function handleDeskChat(
+       return errJson(`存用户楼层失败: ${e.message}`, 500);
+     }
+     // afterCutoffFloors 是存这条之前查的,天然不含它——正好是"此楼之前的近景"
+-    assembleFloors = afterCutoffFloors.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content }));
++    assembleFloors = afterCutoffFloors.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content, aside: isDeskAsideFloor(f) }));
+     assembleInput = message;
+   } else if (mode === 'roll') {
+     // 去掉待重roll的那条assistant自己;再往前若紧跟着一条user楼层,摘出来当input(那条assistant
+@@ -270,7 +270,7 @@ export async function handleDeskChat(
+       assembleInput = beforeLast[beforeLast.length - 1].content;
+       hist = beforeLast.slice(0, -1);
+     }
+-    assembleFloors = hist.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content }));
++    assembleFloors = hist.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content, aside: isDeskAsideFloor(f) }));
+   }
+ 
+   // 5) 装配产出 system、tail 与 report。roll 使用可信快照，normal 使用窗口现状。
+diff --git a/src/chat/deskAssemble.ts b/src/chat/deskAssemble.ts
+index 6507f19..e13b16a 100644
+--- a/src/chat/deskAssemble.ts
++++ b/src/chat/deskAssemble.ts
+@@ -31,6 +31,7 @@ export interface DeskAssembleEnv {
+ export interface AssembleFloor {
+   role: 'user' | 'assistant';
+   content: string;
++  aside?: boolean; // 桌边话(core/deskAside.ts):照常进近景,说话人前缀后面加「(桌边)」
+ }
+ 
+ export interface AssembleParams {
+@@ -587,7 +588,7 @@ export async function assembleDesk(env: DeskAssembleEnv, params: AssembleParams)
+ 
+   // 深度:本楼输入=0,最后一条楼层=1,往前递增(ST 口径,只给上行正则用,跟小纸条位置无关)。
+   const floorLines = floors.map((f, i) => {
+-    const speaker = f.role === 'user' ? ctxUser : ctxChar;
++    const speaker = (f.role === 'user' ? ctxUser : ctxChar) + (f.aside ? '(桌边)' : '');
+     return `${speaker}：${applyUpRegex(f.content || '', regexRules, floors.length - i)}`;
+   });
+   const noteText = params.note ? runMacro(String(params.note)) : '';

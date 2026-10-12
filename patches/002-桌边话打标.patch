@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 07:33:53 +0000
+Subject: [PATCH] desk: 桌边话打标——以「桌边」开头的用户楼及其回楼记
+ report.aside
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:作者要在写作桌边上跟模型说场外话,这些楼不该进时光带、状态板和导出正文;
+先在存楼时打标(report 是现成的自由 JSON 列,不加表字段),后续各处只认这个标记。
+
+- 新增 src/core/deskAside.ts:判据(trim 后以「桌边」开头)与读标记的小工具。
+- chat/desk.ts:普通轮存用户楼时判断并打标;回楼(含重 roll,跟着它回应的那条 user 楼算)
+  的 report 也记 aside: true。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019oTHfvAo5JtNUTTEatrjJ6
+---
+ src/chat/desk.ts      | 10 ++++++++--
+ src/core/deskAside.ts | 27 +++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+), 2 deletions(-)
+ create mode 100644 upstream/src/core/deskAside.ts
+
+diff --git a/src/chat/desk.ts b/src/chat/desk.ts
+index dbe52db..0e160a9 100644
+--- a/src/chat/desk.ts
++++ b/src/chat/desk.ts
+@@ -25,6 +25,7 @@ import { AnthropicStreamBackend } from '../adapters/streamModelBackends.ts';
+ import type { ModelBackend } from '../core/modelBackend.ts';
+ import { validateDeskChannelConfig } from '../core/deskChannelConfig.ts';
+ import { DEFAULT_THINKING_TAGS } from '../tools/deskThinkingTags.ts';
++import { isDeskAsideMessage, isDeskAsideFloor } from '../core/deskAside.ts';
+ 
+ interface DeskChatEnv {
+   OC_DB: D1Database;
+@@ -215,6 +216,8 @@ export async function handleDeskChat(
+   let assembleFloors: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+   let assembleInput = '';
+   const mode: 'normal' | 'roll' = roll ? 'roll' : 'normal';
++  // 桌边话(见 core/deskAside.ts):本轮用户楼是桌边话,回楼也记 aside。
++  let aside = false;
+   // roll 优先使用目标楼当初的 boardBefore；老数据再回溯前一 assistant 的 boardAfter。
+   let rollStateBoard: any = null;
+   let foundRollBoard = false;
+@@ -222,8 +225,9 @@ export async function handleDeskChat(
+   if (mode === 'normal') {
+     userFloorId = genId('fl');
+     const now0 = new Date().toISOString();
++    aside = isDeskAsideMessage(message);
+     try {
+-      await deskStorage.createFloor({ id: userFloorId, windowId, role: 'user', content: message, variants: [message], activeVariant: 0, thinking: null, report: {}, createdAt: now0 });
++      await deskStorage.createFloor({ id: userFloorId, windowId, role: 'user', content: message, variants: [message], activeVariant: 0, thinking: null, report: aside ? { aside: true } : {}, createdAt: now0 });
+     } catch (e: any) {
+       return errJson(`存用户楼层失败: ${e.message}`, 500);
+     }
+@@ -259,6 +263,8 @@ export async function handleDeskChat(
+         // boardAfter 键在,但值是 null/数组/字符串等畸形:这楼当时也没有有效板,继续往前找上一条assistant楼
+       }
+     }
++    // 重 roll 的回楼跟着它回应的那条 user 楼算;前面没有 user 楼(手改造出来的边角)就沿用目标楼自己的标记。
++    aside = isDeskAsideFloor(beforeLast.length && beforeLast[beforeLast.length - 1].role === 'user' ? beforeLast[beforeLast.length - 1] : lastFloor);
+     let hist = beforeLast;
+     if (beforeLast.length && beforeLast[beforeLast.length - 1].role === 'user') {
+       assembleInput = beforeLast[beforeLast.length - 1].content;
+@@ -325,7 +331,7 @@ export async function handleDeskChat(
+     const boardBeforeTrusted = mode === 'normal' || foundRollBoard;
+     // stateBoardGateErrors 只在"解析成功但被闸拒"时落report,给前端说清弃用原因(纯解析失败仍走老文案)
+     const hasUsage = !!usageActual && (usageActual.input + usageActual.output + usageActual.cache_read + usageActual.cache_write) > 0;
+-    const reportOut = { ...report, stateBoardStale: !boardUsable, ...(boardGateErrors.length ? { stateBoardGateErrors: boardGateErrors } : {}), ...(boardBeforeTrusted ? { boardBefore: effectiveStateBoard } : {}), ...(hasUsage ? { usageActual } : {}), boardAfter: appliedBoard };
++    const reportOut = { ...report, stateBoardStale: !boardUsable, ...(boardGateErrors.length ? { stateBoardGateErrors: boardGateErrors } : {}), ...(boardBeforeTrusted ? { boardBefore: effectiveStateBoard } : {}), ...(hasUsage ? { usageActual } : {}), boardAfter: appliedBoard, ...(aside ? { aside: true } : {}) };
+     let floorId = '';
+     let floorCreatedAt = '';
+     let committedReport: Record<string, unknown> | null = null;
+diff --git a/src/core/deskAside.ts b/src/core/deskAside.ts
+new file mode 100644
+index 0000000..9569c84
+--- /dev/null
++++ b/src/core/deskAside.ts
+@@ -0,0 +1,27 @@
++// 桌边话:作者在写作桌边上跟模型说的场外话(讨论剧情、提意见、问问题),不是小说正文。
++//
++// 判据:用户那一楼的正文去掉首尾空白后以「桌边」两个字开头(后面跟换行、冒号、空格或直接正文都行),
++// 这一楼就是桌边话;回应它的那一楼也算。chat/desk.ts 存楼时在 report 里记 aside: true(report 是
++// 现成的自由 JSON 列,不加表字段),之后各处只认这个标记,不再按正文重判——楼层被手改也不翻案。
++//
++// 桌边楼照常进近景(模型得知道刚才说了什么,说话人前缀后面加「(桌边)」),但不进时光带、
++// 不进状态板、导出正文时默认不收。
++
++export const DESK_ASIDE_PREFIX = '桌边';
++
++export function isDeskAsideMessage(text: unknown): boolean {
++  return typeof text === 'string' && text.trim().startsWith(DESK_ASIDE_PREFIX);
++}
++
++// report 可能是适配器已经解析好的对象,也可能是直接查 D1 拿到的 JSON 文本;坏 JSON 当不是。
++export function isDeskAsideReport(report: unknown): boolean {
++  let value = report;
++  if (typeof value === 'string') {
++    try { value = JSON.parse(value); } catch { return false; }
++  }
++  return !!value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).aside === true;
++}
++
++export function isDeskAsideFloor(floor: { report?: unknown } | null | undefined): boolean {
++  return !!floor && isDeskAsideReport(floor.report);
++}
