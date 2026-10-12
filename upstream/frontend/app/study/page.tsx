@@ -8,6 +8,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } fr
 import HeatBg from '../HeatBg';
 import ReadingCorner from './ReadingCorner';
 import TypingDesk, { type TypingDeskHandle } from './TypingDesk';
+import { SkinPanel, useSkinBoot } from './deskTheme';
 import {
   LoreTriggerFields, DEFAULT_LORE_TRIGGER, triggerKeysFromText, triggerModeForSave,
   type LoreTriggerValue, type LorePosition, type CharacterFields,
@@ -184,16 +185,36 @@ const RAIL_CSS = `
 }
 @media (max-width: 700px) {
   .sty-shell { border: 0 !important; border-radius: 0 !important; flex-direction: column; }
-  .sty-rail { width: 100%; flex-direction: row; align-items: center; gap: 8px; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line-soft); overflow-x: auto; overscroll-behavior-x: contain; }
-  .sty-rail.collapsed { width: 100%; padding: 10px; }
-  .sty-rail-brand { display: none; }
-  .sty-rail-top, .sty-rail.collapsed .sty-rail-top { flex-direction: row; margin-bottom: 0; }
-  .sty-rail-collapse { display: none; }
+  /* 手机:廊子改成底栏(家/书架/打字桌/读书角/墙纸),一指够得着;写作窗打开时整条让位给输入区。
+     顶上按壳报的刘海高度让位(--safe-top 由安卓壳写进来,浏览器里走 env())。 */
+  .sty-main { order: 1; }
+  .sty-rail { order: 2; width: 100%; flex-direction: row; align-items: stretch; gap: 0; padding: 6px 8px calc(8px + var(--safe-bottom, env(safe-area-inset-bottom, 0px))); border-right: 0; border-top: 1px solid var(--line-soft); overflow: visible; }
+  .sty-rail.collapsed { width: 100%; padding-left: 8px; padding-right: 8px; }
+  .sty-rail-pattern, .sty-rail-brand, .sty-rail-collapse, .sty-rail-forget { display: none; }
+  .sty-rail-top, .sty-rail.collapsed .sty-rail-top { flex: 1; flex-direction: row; margin-bottom: 0; }
   .sty-rail.collapsed .sty-rail-label { display: inline; }
-  .sty-rail-doors { flex-direction: row; gap: 4px; }
-  .sty-rail-btn { width: auto; flex: none; }
+  .sty-rail-doors { flex: 3; flex-direction: row; gap: 0; }
+  .sty-rail-btn, .sty-rail.collapsed .sty-rail-btn { flex: 1; width: auto; flex-direction: column; justify-content: center; gap: 3px; padding: 4px 0; font-size: 11px; border-radius: 10px; }
+  .sty-rail-btn.active { box-shadow: none; background: var(--scale-0); }
+  .sty-rail-glyph { width: auto; font-size: 17px; line-height: 1; }
   .sty-home { order: -1; margin-top: 0; }
-  .sty-scroll { padding: 18px 16px 32px; }
+  .sty-rail-skin { flex: 1; margin-top: 0 !important; }
+  .sty-shell.writing .sty-rail { display: none; }
+  .sty-scroll { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 32px; }
+  .desk-list { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 40px !important; }
+  /* 写作窗的阅读态:我的楼不套卡片、宋体、行距松;她的楼是左边一道线的引文;
+     「复制 编辑 第几楼」那行藏起来,点一下楼层才出。 */
+  .desk-main { padding: 14px 16px 10px !important; }
+  .desk-main > div > * + * { margin-top: 20px !important; }
+  .floor-ai-label { display: none !important; }
+  .floor-ai-wrap { max-width: 100% !important; }
+  .floor-ai { max-width: 100% !important; background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 2px !important; font-family: var(--font-reading-user, var(--font-serc)); font-size: 16.5px !important; line-height: 1.95 !important; color: var(--ink-deep) !important; }
+  .floor-user-wrap { align-items: flex-start !important; }
+  .floor-user { max-width: 100% !important; background: transparent !important; border-left: 2px solid var(--scale-2); border-radius: 0 !important; padding: 2px 0 2px 12px !important; color: var(--ink2) !important; font-size: 14.5px !important; line-height: 1.7 !important; }
+  html[data-glass="1"] .floor-user { border-radius: 14px 14px 4px 14px !important; padding: 10px 14px !important; color: var(--ink-deep) !important; }
+  .floor-meta { display: none !important; }
+  .floor-group.meta-open .floor-meta { display: flex !important; }
+  .floor-meta * { font-size: 10.5px !important; }
 }
 /* 书房挂载期锁 root/body 滚动,不让 Safari 把 window 推着滚 */
 html.sty-lock-scroll, html.sty-lock-scroll body { overflow: hidden; }
@@ -214,6 +235,10 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
 
   const [view, setView] = useState<View>('shelf');
   const [railCollapsed, setRailCollapsed] = useState(false);
+  // 墙纸面板开关;打字桌是否正开着一扇窗(手机上底栏要给输入区让位,玻璃模式下头尾栏要浮起来)
+  const [skinOpen, setSkinOpen] = useState(false);
+  const [deskWriting, setDeskWriting] = useState(false);
+  useSkinBoot();
   const [cameFrom, setCameFrom] = useState<View>('shelf'); // 详情页"← 返回"回哪儿
   // 左廊常驻后,从打字桌切去别的门要先问一句"现在能走吗"(配方切换在飞禁离窗那道闸,
   // 见 TypingDesk.tsx requestLeave 定义处注释)——TypingDesk 挂载时才有实例,ref 初始是 null,
@@ -725,9 +750,14 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
   return (
     <div className="sty-page" style={{ position: 'relative', boxSizing: 'border-box', background: 'var(--page-bg)', fontFamily: 'var(--font-sans)' }}>
       <style>{RAIL_CSS}</style>
+      <SkinPanel
+        open={skinOpen}
+        onClose={() => setSkinOpen(false)}
+        onForgetToken={onForgetToken ? () => { if (view === 'desk' && typingDeskRef.current && !typingDeskRef.current.requestLeave()) return; setSkinOpen(false); onForgetToken(); } : undefined}
+      />
       <div
         ref={shellRef}
-        className="sty-shell"
+        className={`sty-shell${deskWriting ? ' writing' : ''}`}
         style={{
           position: 'relative', zIndex: 1, background: 'var(--card-bg)',
         }}
@@ -763,11 +793,22 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
               );
             })}
           </div>
+          {/* 墙纸、玻璃、正文字体:面板见 deskTheme.tsx。手机上廊子变底栏,这颗是第五格;
+              「换口令」在底栏里藏起来,搬进面板最底下一行(桌面上两颗都在廊子里)。 */}
+          <button
+            type="button"
+            className="serc sty-rail-btn sty-rail-skin"
+            style={{ border: 0, marginTop: 'auto', color: 'var(--ink2)' }}
+            title="墙纸、玻璃、正文字体"
+            onClick={() => setSkinOpen(true)}
+          >
+            <span className="sty-rail-glyph">✿</span><span className="sty-rail-label">墙纸</span>
+          </button>
           {onForgetToken && (
             <button
               type="button"
-              className="serc sty-rail-btn"
-              style={{ border: 0, marginTop: 'auto', color: 'var(--ink2)' }}
+              className="serc sty-rail-btn sty-rail-forget"
+              style={{ border: 0, color: 'var(--ink2)' }}
               title="清掉存在这台设备上的口令,重新输入"
               onClick={() => { if (view === 'desk' && typingDeskRef.current && !typingDeskRef.current.requestLeave()) return; onForgetToken(); }}
             >
@@ -776,12 +817,12 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
           )}
         </nav>
 
-        <div className="sty-main">
+        <div className={`sty-main${deskWriting ? ' desk-writing' : ''}`}>
         <StudyShellProvider value={shellSlots}>
         <div className="sty-stage-top" ref={setTopEl} />
         <div className={`sty-stage-scroll${view === 'desk' ? ' is-page' : ''}`} ref={setScrollEl}>
         {view === 'desk' ? (
-          <TypingDesk ref={typingDeskRef} base={base} envOk={envOk} onBack={() => navigate('shelf')} />
+          <TypingDesk ref={typingDeskRef} base={base} envOk={envOk} onBack={() => navigate('shelf')} onModeChange={(m) => setDeskWriting(m === 'write')} />
         ) : (
         <div className="sty-scroll">
 
@@ -805,7 +846,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
               </div>
 
               {searching && <div style={{ fontSize: 13, color: 'var(--ink2)', marginTop: 14 }}>正在书架间翻找…</div>}
-              {!searching && searchError && <div style={{ fontSize: 13, color: '#c2693f', marginTop: 14 }}>搜索翻车了：{searchError}</div>}
+              {!searching && searchError && <div style={{ fontSize: 13, color: 'var(--warn)', marginTop: 14 }}>搜索翻车了：{searchError}</div>}
               {!searching && !searchError && searchTried && searchResults.length === 0 && (
                 <div style={{ fontSize: 13, color: 'var(--ink2)', marginTop: 14 }}>没搜到相关的~换个词试试?</div>
               )}
@@ -837,7 +878,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
               {statsLoading ? (
                 <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>正在清点书架…</div>
               ) : statsError ? (
-                <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: '#c2693f' }}>书架清点失败：{statsError}</div>
+                <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--warn)' }}>书架清点失败：{statsError}</div>
               ) : (
                 <>
                   {!stats || Object.keys(stats.by_project).length === 0 ? (
@@ -976,7 +1017,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
             {listLoading ? (
               <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>正在翻这一格…</div>
             ) : listError ? (
-              <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: '#c2693f' }}>翻不开：{listError}</div>
+              <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--warn)' }}>翻不开：{listError}</div>
             ) : listItems.length === 0 ? (
               <div className="card" style={{ ...glassCardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>这一格还空着~</div>
             ) : (
@@ -1019,7 +1060,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
                   <span className="serc" style={{ fontSize: 18, color: 'var(--ink-deep)' }}>新增一条</span>
                 </div>
                 <EditForm form={form} setForm={setForm} projectOptions={projectOptions} />
-                {saveError && <div style={{ fontSize: 13, color: '#c2693f', marginTop: 12 }}>保存失败：{saveError}</div>}
+                {saveError && <div style={{ fontSize: 13, color: 'var(--warn)', marginTop: 12 }}>保存失败：{saveError}</div>}
                 <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
                   <button className="serc" onClick={handleSave} disabled={saving} style={{ ...btnPrimaryStyle, opacity: saving ? 0.6 : 1 }}>{saving ? '保存中…' : '保存'}</button>
                   <button className="serc" onClick={cancelEdit} style={pillStyle}>取消</button>
@@ -1032,7 +1073,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
                   <button className="serc" onClick={backFromDetail} style={pillStyle}>← 返回</button>
                 </div>
-                <div style={{ fontSize: 13, color: '#c2693f' }}>翻不开：{detailError}</div>
+                <div style={{ fontSize: 13, color: 'var(--warn)' }}>翻不开：{detailError}</div>
               </>
             ) : !detail ? null : detailMode === 'edit' ? (
               // 编辑表单
@@ -1042,7 +1083,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
                   <span className="serc" style={{ fontSize: 18, color: 'var(--ink-deep)' }}>编辑</span>
                 </div>
                 <EditForm form={form} setForm={setForm} projectOptions={projectOptions} />
-                {saveError && <div style={{ fontSize: 13, color: '#c2693f', marginTop: 12 }}>保存失败：{saveError}</div>}
+                {saveError && <div style={{ fontSize: 13, color: 'var(--warn)', marginTop: 12 }}>保存失败：{saveError}</div>}
                 <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
                   <button className="serc" onClick={handleSave} disabled={saving} style={{ ...btnPrimaryStyle, opacity: saving ? 0.6 : 1 }}>{saving ? '保存中…' : '保存'}</button>
                   <button className="serc" onClick={cancelEdit} style={pillStyle}>取消</button>
@@ -1062,11 +1103,11 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
                     className="serc"
                     onClick={onDeleteClick}
                     disabled={deleting}
-                    style={{ ...pillStyle, color: deleteStage === 1 ? '#fffdf5' : '#c2693f', background: deleteStage === 1 ? '#c2693f' : 'var(--card-bg)', opacity: deleting ? 0.6 : 1 }}
+                    style={{ ...pillStyle, color: deleteStage === 1 ? 'var(--on-accent)' : 'var(--warn)', background: deleteStage === 1 ? 'var(--warn)' : 'var(--card-bg)', opacity: deleting ? 0.6 : 1 }}
                   >
                     {deleting ? '删除中…' : deleteStage === 1 ? '真的删?再点一次' : '删除'}
                   </button>
-                  {deleteError && <span style={{ fontSize: 12.5, color: '#c2693f' }}>{deleteError}</span>}
+                  {deleteError && <span style={{ fontSize: 12.5, color: 'var(--warn)' }}>{deleteError}</span>}
                 </div>
 
                 <div className="serc" style={{ fontSize: 22, color: 'var(--ink-deep)' }}>{detail.title}</div>

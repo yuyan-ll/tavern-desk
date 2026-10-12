@@ -10,5 +10,6 @@
   "allowedOrigins": [],
   "defaultModel": "",
   "segmentsModule": "",
+  "fontsDir": "",
   "fakeModel": false
 }

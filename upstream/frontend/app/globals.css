@@ -52,8 +52,118 @@
   --heatbg-2: #cadcad;
   --heatbg-3: #9cbf79;
   --scrim-rgb: 244, 246, 238;
+  /* 语义色补两项:报错/警示用的砖红、强调色上的字色——以前各处写死色号,换墙纸会漏 */
+  --warn: #c2693f;
+  --on-accent: #fffdf5;
+  /* 玻璃层(html[data-glass="1"] 才用):填充、亮边、顶部高光、投影、卡片底、色斑 */
+  --g-fill: rgba(255, 255, 255, 0.42);
+  --g-fill2: rgba(255, 255, 255, 0.58);
+  --g-rim: rgba(255, 255, 255, 0.72);
+  --g-hi: rgba(255, 255, 255, 0.92);
+  --g-shadow: rgba(60, 75, 45, 0.16);
+  --g-card: rgba(255, 255, 255, 0.74);
 }
 
+/* ════════════════════════════════════════════════════════════
+   墙纸:每套就是一组变量值,挂在 html[data-theme]。纸绿(sage)是上面 :root 的默认。
+   选哪套、跟不跟系统,见 study/deskTheme.tsx;layout.tsx 里有一段开机脚本先把存的选择
+   写到 html 上,免得首屏闪一下白。
+   ════════════════════════════════════════════════════════════ */
+html[data-theme="ink"] {
+  /* 墨夜:深青灰底、米白字、同一系的绿做强调 */
+  --scale-0: #26301f;
+  --scale-1: #33432a;
+  --scale-2: #4f6b3a;
+  --scale-3: #6f9e4a;
+  --scale-4: #a3c98a;
+  --page-bg: #1b1f1a;
+  --card-bg: #242a22;
+  --ink-deep: #e6ead9;
+  --ink-body: #c9cfbc;
+  --ink2: #7f8a72;
+  --line-soft: #30372c;
+  --dash-line: #3d4737;
+  --accent: #8fb86b;
+  --card-shadow: rgba(0, 0, 0, 0.35);
+  --card-shadow2: rgba(0, 0, 0, 0.5);
+  --glass-bg: rgba(36, 42, 34, 0.8);
+  --heatbg-0: #222a1f;
+  --heatbg-1: #283322;
+  --heatbg-2: #33432a;
+  --heatbg-3: #4f6b3a;
+  --scrim-rgb: 27, 31, 26;
+  --warn: #d98b6a;
+  --on-accent: #16200f;
+  --g-fill: rgba(255, 255, 255, 0.07);
+  --g-fill2: rgba(255, 255, 255, 0.11);
+  --g-rim: rgba(255, 255, 255, 0.16);
+  --g-hi: rgba(255, 255, 255, 0.22);
+  --g-shadow: rgba(0, 0, 0, 0.45);
+  --g-card: rgba(255, 255, 255, 0.08);
+  color-scheme: dark;
+}
+html[data-theme="rice"] {
+  /* 米纸:暖米底、褐字、琥珀强调 */
+  --scale-0: #f0e8d8;
+  --scale-1: #e2d2b2;
+  --scale-2: #cdb27f;
+  --scale-3: #b0823f;
+  --scale-4: #7a5828;
+  --page-bg: #f7f3ea;
+  --card-bg: #fffdf7;
+  --ink-deep: #4a3f32;
+  --ink-body: #5c5245;
+  --ink2: #a4998a;
+  --line-soft: #ece5d8;
+  --dash-line: #dccfb8;
+  --accent: #b0823f;
+  --card-shadow: rgba(95, 80, 55, 0.10);
+  --card-shadow2: rgba(95, 80, 55, 0.16);
+  --glass-bg: rgba(255, 253, 247, 0.8);
+  --heatbg-0: #efe8da;
+  --heatbg-1: #ebe2d0;
+  --heatbg-2: #e2d2b2;
+  --heatbg-3: #cdb27f;
+  --scrim-rgb: 247, 243, 234;
+  --warn: #b85c3a;
+  --on-accent: #fffaf0;
+  --g-shadow: rgba(95, 80, 55, 0.16);
+}
+html[data-theme="bronze"] {
+  /* 乌金:暖黑底、米字、铜金强调 */
+  --scale-0: #2b2620;
+  --scale-1: #3d3429;
+  --scale-2: #6b5538;
+  --scale-3: #a3783f;
+  --scale-4: #d0a36a;
+  --page-bg: #1e1b18;
+  --card-bg: #272320;
+  --ink-deep: #ece4d6;
+  --ink-body: #cfc5b4;
+  --ink2: #8a7f70;
+  --line-soft: #35302a;
+  --dash-line: #46403a;
+  --accent: #c9955a;
+  --card-shadow: rgba(0, 0, 0, 0.35);
+  --card-shadow2: rgba(0, 0, 0, 0.5);
+  --glass-bg: rgba(39, 35, 32, 0.8);
+  --heatbg-0: #262220;
+  --heatbg-1: #2c2723;
+  --heatbg-2: #3d3429;
+  --heatbg-3: #6b5538;
+  --scrim-rgb: 30, 27, 24;
+  --warn: #e0906a;
+  --on-accent: #1f1710;
+  --g-fill: rgba(255, 255, 255, 0.07);
+  --g-fill2: rgba(255, 255, 255, 0.11);
+  --g-rim: rgba(255, 255, 255, 0.16);
+  --g-hi: rgba(255, 255, 255, 0.22);
+  --g-shadow: rgba(0, 0, 0, 0.45);
+  --g-card: rgba(255, 255, 255, 0.08);
+  color-scheme: dark;
+}
+
+/* 正文阅读字体:墙纸面板选了本机字体时由 deskTheme.tsx 设 --font-reading-user;没设就用后面的回落 */
 /* ── base ── */
 html {
   background: var(--page-bg);
@@ -81,3 +191,70 @@ body {
 
 /* ── 气泡断词：长英文/URL 允许在任意处折行，不撑破气泡 ── */
 .wrap-hard { overflow-wrap: break-word; overflow-wrap: anywhere; }
+
+/* ════════════════════════════════════════════════════════════
+   液态玻璃(开关在墙纸面板,开了 html 上挂 data-glass="1")。
+   只上在浮着的那几片东西上:写作窗的头栏和输入区、手机底栏、你的那楼气泡、列表页的卡片、
+   ⋯ 菜单;正文不上,不然滑动掉帧。底色铺几团同系的色斑,玻璃才有东西可折。
+   浮起来的做法:头栏/底栏脱离文档流盖在滚动区上,滚动区按顶槽/底槽量出来的高度留边
+   (--desk-top-h / --desk-bottom-h 由 TypingDesk 量,见那边 ResizeObserver)。
+   ════════════════════════════════════════════════════════════ */
+html[data-glass="1"] .sty-stage-scroll {
+  background:
+    radial-gradient(60% 38% at 12% 6%, color-mix(in srgb, var(--scale-2) 55%, transparent), transparent 72%),
+    radial-gradient(48% 30% at 88% 28%, color-mix(in srgb, var(--scale-1) 85%, transparent), transparent 72%),
+    radial-gradient(70% 45% at 45% 95%, color-mix(in srgb, var(--scale-2) 40%, transparent), transparent 72%),
+    var(--page-bg);
+  background-attachment: fixed;
+}
+html[data-glass="1"] .glass,
+html[data-glass="1"] .desk-header,
+html[data-glass="1"] .chat-inputbar,
+html[data-glass="1"] .desk-menu {
+  background: var(--g-fill) !important;
+  border: 1px solid var(--g-rim) !important;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.15) !important;
+}
+html[data-glass="1"] .desk-header { border-radius: 24px !important; }
+html[data-glass="1"] .chat-inputbar { border-radius: 26px !important; }
+html[data-glass="1"] .desk-pill,
+html[data-glass="1"] .desk-header .pill,
+html[data-glass="1"] .chat-inputbar textarea {
+  background: var(--g-fill2) !important;
+  border: 1px solid var(--g-rim) !important;
+  box-shadow: inset 0 1px 0 var(--g-hi) !important;
+}
+html[data-glass="1"] .chat-inputbar .desk-send {
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+}
+html[data-glass="1"] .floor-user {
+  background: color-mix(in srgb, var(--scale-1) 55%, transparent) !important;
+  border: 1px solid var(--g-rim);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: inset 0 1px 0 var(--g-hi), 0 4px 14px var(--g-shadow);
+}
+html[data-glass="1"] .card {
+  background: var(--g-card) !important;
+  border: 1px solid var(--g-rim) !important;
+  backdrop-filter: blur(18px) saturate(170%);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  box-shadow: 0 8px 26px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
+}
+/* 写作窗:头栏、底栏浮在滚动区上,滚动区按量出来的高度留边 */
+html[data-glass="1"] .sty-main.desk-writing .sty-stage-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 8; pointer-events: none;
+  /* 刘海让位留在玻璃片外面(头栏自己不再加 --safe-top 内边距) */
+  padding: calc(10px + var(--safe-top, env(safe-area-inset-top, 0px))) 10px 0;
+}
+html[data-glass="1"] .sty-main.desk-writing .desk-header { padding-top: 12px !important; }
+html[data-glass="1"] .sty-main.desk-writing .sty-stage-top > * { pointer-events: auto; }
+html[data-glass="1"] .sty-main.desk-writing .sty-stage-bottom {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 2; padding: 0 10px 12px;
+}
+html[data-glass="1"] .sty-main.desk-writing .sty-stage-scroll {
+  padding-top: var(--desk-top-h, 0px);
+  padding-bottom: var(--desk-bottom-h, 0px);
+}
