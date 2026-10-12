@@ -232,7 +232,7 @@ export async function handleDeskChat(
       return errJson(`存用户楼层失败: ${e.message}`, 500);
     }
     // afterCutoffFloors 是存这条之前查的,天然不含它——正好是"此楼之前的近景"
-    assembleFloors = afterCutoffFloors.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content }));
+    assembleFloors = afterCutoffFloors.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content, aside: isDeskAsideFloor(f) }));
     assembleInput = message;
   } else if (mode === 'roll') {
     // 去掉待重roll的那条assistant自己;再往前若紧跟着一条user楼层,摘出来当input(那条assistant
@@ -270,7 +270,7 @@ export async function handleDeskChat(
       assembleInput = beforeLast[beforeLast.length - 1].content;
       hist = beforeLast.slice(0, -1);
     }
-    assembleFloors = hist.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content }));
+    assembleFloors = hist.slice(-HISTORY_CAP).map((f: any) => ({ role: f.role, content: f.content, aside: isDeskAsideFloor(f) }));
   }
 
   // 5) 装配产出 system、tail 与 report。roll 使用可信快照，normal 使用窗口现状。

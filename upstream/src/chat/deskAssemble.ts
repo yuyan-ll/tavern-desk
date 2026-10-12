@@ -31,6 +31,7 @@ export interface DeskAssembleEnv {
 export interface AssembleFloor {
   role: 'user' | 'assistant';
   content: string;
+  aside?: boolean; // 桌边话(core/deskAside.ts):照常进近景,说话人前缀后面加「(桌边)」
 }
 
 export interface AssembleParams {
@@ -587,7 +588,7 @@ export async function assembleDesk(env: DeskAssembleEnv, params: AssembleParams)
 
   // 深度:本楼输入=0,最后一条楼层=1,往前递增(ST 口径,只给上行正则用,跟小纸条位置无关)。
   const floorLines = floors.map((f, i) => {
-    const speaker = f.role === 'user' ? ctxUser : ctxChar;
+    const speaker = (f.role === 'user' ? ctxUser : ctxChar) + (f.aside ? '(桌边)' : '');
     return `${speaker}：${applyUpRegex(f.content || '', regexRules, floors.length - i)}`;
   });
   const noteText = params.note ? runMacro(String(params.note)) : '';
