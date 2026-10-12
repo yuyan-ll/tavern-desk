@@ -139,6 +139,10 @@ function fmtTime(iso?: string): string {
     return `${date} ${time}`;
   } catch { return ''; }
 }
+// 输入框自动长高的上限:手机上五行左右就封顶,再多在框里滚,不把楼层顶出屏幕
+function composerCap(): number {
+  return typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches ? 132 : 240;
+}
 function grow(el: HTMLTextAreaElement | null, composing = false, cap = 240) {
   if (!el) return;
   // 楼层行内编辑:height='auto'→重设成scrollHeight这套自增高手法,每次都会强制一次同步reflow
@@ -321,7 +325,7 @@ function FloorReportView({ report }: { report: FloorReport | null | undefined })
   return (
     <div className="mt-1.5 max-w-[85%] max-[760px]:max-w-[92%] border border-dashed border-dash-line rounded-xl bg-card/80 px-4 py-3 font-mono text-[11px] leading-relaxed text-ink-body break-all whitespace-pre-wrap">
       {report.stateBoardStale && (
-        <div style={{ color: '#c2693f', marginBottom: 6 }}>
+        <div style={{ color: 'var(--warn)', marginBottom: 6 }}>
           {Array.isArray(report.stateBoardGateErrors) && report.stateBoardGateErrors.length
             ? `模型这楼写的状态板没过协议闸(${report.stateBoardGateErrors.join(';')}),没敢用,沿用旧板`
             : '这楼的状态板没解析出来,沿用旧板'}
@@ -413,7 +417,7 @@ function FloorActionRow({
   afterReroll?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3 px-1.5 flex-wrap">
+    <div className="floor-meta flex items-center gap-3 px-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
       {/* 动作条顺序统一:assistant楼新序=复制、编辑、素颜/美化、透视、重roll
           (复制/编辑排前两位;素颜/美化即extra,原来插在
           复制和编辑之间,现挪到编辑之后)。user楼没有复制/透视(isAssistant一律false),extra
@@ -461,13 +465,23 @@ function FloorActionRow({
 // 组件这时还没被卸载,横幅出得来),放行就顺手把飞着的流掐掉+世界代数翻篇(genRef++)再返回 true。
 export type TypingDeskHandle = { requestLeave: () => boolean };
 
-const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; onBack: () => void }>(function TypingDesk({ base, envOk, onBack }, deskRef) {
+const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; onBack: () => void; onModeChange?: (mode: 'list' | 'write') => void }>(function TypingDesk({ base, envOk, onBack, onModeChange }, deskRef) {
   // 壳槽位(见 studyShell.tsx):topEl/bottomEl 是头尾栏 portal 目标,scrollEl 是应用滚动唯一量尺。
   const { topEl, bottomEl, scrollEl } = useStudyShell();
   // 应用滚动的合法上限与钳制:落底/锚定一律走这两把尺。
   const docBottomTop = useCallback(() => Math.max(0, (scrollEl?.scrollHeight ?? 0) - (scrollEl?.clientHeight ?? 0)), [scrollEl]);
   const clampScrollTop = useCallback((top: number) => Math.min(docBottomTop(), Math.max(0, top)), [docBottomTop]);
   const [mode, setMode] = useState<'list' | 'write'>('list');
+  // 告诉 page.tsx 现在是列表屏还是写作屏:手机上写作屏要把底栏藏掉,玻璃模式下头尾栏要浮起来。
+  // 走 ref 免得父级每次渲染传新函数就重跑;卸载时报一声 list,底栏回来。
+  const onModeChangeRef = useRef(onModeChange);
+  onModeChangeRef.current = onModeChange;
+  useEffect(() => {
+    onModeChangeRef.current?.(mode);
+    return () => { onModeChangeRef.current?.('list'); };
+  }, [mode]);
+  // 楼层动作条(复制/编辑/第几楼)手机上默认藏着,点一下楼层才出;记当前点开的是哪一楼
+  const [metaOpenKey, setMetaOpenKey] = useState<string | null>(null);
   const [projects, setProjects] = useState<string[]>(DEFAULT_PROJECTS);
   const [project, setProject] = useState<string>(DEFAULT_PROJECTS[0]);
   // 向导里手建的项目名登记簿——三路来源的异步拉取完成时必须并上它,不许把刚手建的项目
@@ -1020,6 +1034,26 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
   // 系统性偏矮一截,浮窗标题会叠进头栏底边被盖住。
   const headerRef = useRef<HTMLElement>(null);
   const footerRef = useRef<HTMLElement>(null);
+  // 玻璃模式下头栏/底栏脱离文档流浮在滚动区上(globals.css html[data-glass] 那段),滚动区要按
+  // 顶槽/底槽(含刘海让位和外边距)的真实高度留边:量出来写进 --desk-top-h / --desk-bottom-h。
+  // 不开玻璃时这两个变量没人读,量了也无妨。
+  useEffect(() => {
+    if (mode !== 'write' || typeof ResizeObserver === 'undefined') return;
+    const style = document.documentElement.style;
+    const measure = () => {
+      const h = topEl?.getBoundingClientRect().height || 0;
+      const f = bottomEl?.getBoundingClientRect().height || 0;
+      style.setProperty('--desk-top-h', `${Math.ceil(h)}px`);
+      style.setProperty('--desk-bottom-h', `${Math.ceil(f)}px`);
+    };
+    const ro = new ResizeObserver(measure);
+    if (topEl) ro.observe(topEl);
+    if (bottomEl) ro.observe(bottomEl);
+    if (headerRef.current) ro.observe(headerRef.current);
+    if (footerRef.current) ro.observe(footerRef.current);
+    measure();
+    return () => { ro.disconnect(); style.removeProperty('--desk-top-h'); style.removeProperty('--desk-bottom-h'); };
+  }, [mode, topEl, bottomEl]);
   const [footerH, setFooterH] = useState(88);
   // 浮窗 fixed 钉视口后的水平尺:对齐写作列(视口减竖廊),从头栏实测矩形取 left/width——
   // 头栏 sticky 在列内、恒与列同宽,是现成的列尺;竖廊收展会改头栏宽度,同一个 RO 自然跟手。
@@ -3238,13 +3272,13 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     // 头栏 portal 进壳的顶槽(见 studyShell.tsx):z-8(< 侧栏本体z-9,> 背板z-7),
     // 归位到统一定序,见 DeskDrawers.tsx 侧栏本体 zIndex 声明处注释。
     const header = (
-      <header ref={headerRef} className="flex-none z-[8] bg-page/85 backdrop-blur border-b border-line-soft px-6 py-3 max-[760px]:px-3.5 max-[760px]:pt-3 max-[760px]:pb-[11px]">
+      <header ref={headerRef} className="desk-header flex-none z-[8] bg-page/85 backdrop-blur border-b border-line-soft px-6 pb-3 max-[760px]:px-3.5 max-[760px]:pb-[11px]" style={{ paddingTop: 'calc(12px + var(--safe-top, env(safe-area-inset-top, 0px)))' }}>
           <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
             <div className="flex items-center gap-3 min-w-0">
               <button onClick={backToList} className="serc pill inline-flex items-center gap-2 text-sm text-ink-body bg-card border border-line-soft px-4 py-1.5 rounded-full whitespace-nowrap">← 返回</button>
               <div className="min-w-0">
                 <div className="serc text-lg text-ink-deep truncate">{win?.title || (winLoadLoading ? '…' : '未命名窗口')}</div>
-                {win && <div className="ser text-[11px] text-ink2 truncate">{win.project}</div>}
+                {win && <div className="ser text-[11px] text-ink2 truncate max-[700px]:hidden">{win.project}</div>}
               </div>
             </div>
             <div className="flex items-center gap-2 flex-none">
@@ -3263,30 +3297,30 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
               <button
                 onClick={() => setWriteDrawerOpen(true)}
                 title="文具盒：本窗设置·积木/配方·正则·核心记忆·导入"
-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
               >
                 文
               </button>
               <button
                 onClick={toggleLorePanel}
                 title="世界书：核心记忆 + 设定/大纲/角色卡·触发关键词"
-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
               >
                 世
               </button>
               {/* 项目级 │ 本窗级 的分界线 */}
-              <span aria-hidden className="self-stretch w-px my-[3px] bg-line-soft shrink-0" />
+              <span aria-hidden className="self-stretch w-px my-[3px] bg-line-soft shrink-0 max-[700px]:hidden" />
               <button
                 onClick={toggleTimelinePanel}
                 title="时光带（本窗）"
-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
               >
                 时
               </button>
               <button
                 onClick={toggleBoardPanel}
                 title="状态板（本窗）"
-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
               >
                 态
               </button>
@@ -3297,14 +3331,22 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 <button
                   onClick={() => setMenuOpen((v) => !v)}
                   title="更多：导出正文 / 立即压缩"
-                  className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+                  className="desk-pill serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
                 >
                   ⋯
                 </button>
                 {menuOpen && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-                    <div className="absolute right-0 mt-2 w-52 bg-card border border-line-soft rounded-2xl shadow-lg p-1.5 z-20 text-sm">
+                    <div className="desk-menu absolute right-0 mt-2 w-52 bg-card border border-line-soft rounded-2xl shadow-lg p-1.5 z-20 text-sm">
+                      {/* 手机上顶栏那四颗单字钮藏起来了,从这儿进(桌面上这一组不显示,钮还在顶栏) */}
+                      <div className="hidden max-[700px]:block">
+                        <button onClick={() => { setMenuOpen(false); setWriteDrawerOpen(true); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">文</span>文具盒</button>
+                        <button onClick={() => { setMenuOpen(false); toggleLorePanel(); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">世</span>世界书</button>
+                        <button onClick={() => { setMenuOpen(false); toggleTimelinePanel(); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">时</span>时光带</button>
+                        <button onClick={() => { setMenuOpen(false); toggleBoardPanel(); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">态</span>状态板</button>
+                        <div className="my-1 border-t border-line-soft" />
+                      </div>
                       <button
                         onClick={() => doExport()}
                         disabled={sending}
@@ -3352,10 +3394,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           // 点按钮也会短暂立旗,但按下到抬起之间撞上一块流的概率毫秒级,无害。
           // (ref 只当"选区在不在对话区"的包含判定根用,不是滚动容器——滚动主体是壳的 scrollEl)
           onPointerDown={(e) => { if (e.button === 0) dragSelectingRef.current = true; }}
-          className="relative z-[1] px-6 py-8 max-[760px]:px-4"
+          className="desk-main relative z-[1] px-6 py-8 max-[760px]:px-4"
         >
           <div className="max-w-2xl mx-auto space-y-5">
-            {winDelError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>{winDelError}</div>}
+            {winDelError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>{winDelError}</div>}
             {/* 下行正则规则表拉取失败的一行淡提示——降级为无操作,不拦楼层照常读写(工单点2) */}
             {downRulesNotice && <div className="text-[11.5px] text-center text-ink2">{downRulesNotice}</div>}
             {/* ⋯ 菜单的回执位。压缩是同步等 30~100 秒的动作,菜单点完就关了,在飞态必须在
@@ -3363,10 +3405,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 但那更像坏了)。回执/报错各占一行,压缩期间先不显示上一轮的回执免得读串。 */}
             {compressing && <div className="text-[11.5px] text-center text-ink2">🌀 正在把旧楼折进时光带…（要跑一趟模型，约半分钟，这期间先别发新楼）</div>}
             {!compressing && compressNote && <div className="text-[11.5px] text-center text-ink2">{compressNote}</div>}
-            {compressError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>压缩没成：{compressError}</div>}
-            {exportError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>导出没成：{exportError}</div>}
+            {compressError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>压缩没成：{compressError}</div>}
+            {exportError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>导出没成：{exportError}</div>}
             {winLoadLoading && <div className="text-ink2 text-sm text-center">推开这扇窗…</div>}
-            {winLoadError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>翻不开：{winLoadError}</div>}
+            {winLoadError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>翻不开：{winLoadError}</div>}
             {!winLoadLoading && !winLoadError && floors.length === 0 && (
               <div className="text-ink2 text-sm text-center py-10">这扇窗还空着～写下第一段吧</div>
             )}
@@ -3389,7 +3431,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
               const floorIndex = floorOldCount + vi; // 楼层号按全量数组算,渲染窗滑动不许变号
               if (f.role === 'user') {
                 return (
-                  <div key={f.key} className="flex flex-col items-end gap-1.5">
+                  <div key={f.key} className={`floor-group floor-user-wrap flex flex-col items-end gap-1.5${metaOpenKey === f.key ? ' meta-open' : ''}`} onClick={() => { if (window.getSelection()?.toString()) return; setMetaOpenKey((k) => (k === f.key ? null : f.key)); }}>
                     {editingFloorKey === f.key ? (
                       <div className="w-[85%] space-y-2">
                         <textarea
@@ -3400,7 +3442,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                           className="w-full resize-none rounded-[20px] border border-dashed border-dash-line bg-card px-4 py-2.5 text-ink-deep leading-relaxed focus:outline-none"
                         />
                         <div className="flex items-center justify-end gap-3">
-                          {editError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{editError}</span>}
+                          {editError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{editError}</span>}
                           <button onClick={cancelFloorEdit} disabled={editSaving} className="text-xs text-ink2 hover:text-ink-body">取消</button>
                           {/* 任务2:user楼(非最后一楼)点这里先过二段确认,文案里的N实时算——见floorSaveLabel/onFloorSaveClick */}
                           <button onClick={() => onFloorSaveClick(f)} disabled={editSaving || sending || !editDraft.trim()} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-4 py-1.5 disabled:opacity-40">
@@ -3410,7 +3452,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                       </div>
                     ) : (
                       <>
-                        <div className="max-w-[80%] max-[760px]:max-w-[86%] rounded-[20px] rounded-br-[6px] bg-scale-1 text-ink-deep px-[18px] py-3.5 wrap-hard whitespace-pre-wrap leading-relaxed">
+                        <div className="floor-user max-w-[80%] max-[760px]:max-w-[86%] rounded-[20px] rounded-br-[6px] bg-scale-1 text-ink-deep px-[18px] py-3.5 wrap-hard whitespace-pre-wrap leading-relaxed">
                           {f.content}
                         </div>
                         <FloorActionRow
@@ -3482,9 +3524,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
               ) : null;
 
               return (
-                <div key={f.key} className="flex flex-col items-start gap-1.5">
-                  <div className="max-w-[88%] w-full space-y-2.5">
-                    <div className="serc text-[11px] text-ink2 px-1">打字桌</div>
+                <div key={f.key} className={`floor-group flex flex-col items-start gap-1.5${metaOpenKey === f.key ? ' meta-open' : ''}`} onClick={() => { if (window.getSelection()?.toString()) return; setMetaOpenKey((k) => (k === f.key ? null : f.key)); }}>
+                  <div className="floor-ai-wrap max-w-[88%] w-full space-y-2.5">
+                    <div className="floor-ai-label serc text-[11px] text-ink2 px-1">打字桌</div>
                     {thinkingText && (
                       <details className="text-xs">
                         <summary className="serc inline-flex items-center gap-2 cursor-pointer select-none text-ink-body bg-card/80 border border-dashed border-dash-line rounded-full px-3 py-1 list-none [&::-webkit-details-marker]:hidden">
@@ -3503,7 +3545,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                           className="w-full resize-none rounded-[20px] border border-dashed border-dash-line bg-card px-4 py-2.5 text-ink-body leading-relaxed focus:outline-none"
                         />
                         <div className="flex items-center justify-end gap-3">
-                          {editError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{editError}</span>}
+                          {editError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{editError}</span>}
                           <button onClick={cancelFloorEdit} disabled={editSaving} className="text-xs text-ink2 hover:text-ink-body">取消</button>
                           {/* assistant楼:onFloorSaveClick对非user角色直接转confirmFloorEdit,行为跟改动前一字不差 */}
                           <button onClick={() => onFloorSaveClick(f)} disabled={editSaving || sending || !editDraft.trim()} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-4 py-1.5 disabled:opacity-40">
@@ -3512,7 +3554,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                         </div>
                       </div>
                     ) : !body && segments.length <= 1 ? (
-                      <div className="max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]">
+                      <div className="floor-ai max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]">
                         <span className="text-ink2">{f.streaming ? '在写…' : ''}</span>
                       </div>
                     ) : (
@@ -3536,7 +3578,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                                   <div
                                     key={contentKey}
                                     className="max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] border border-line-soft shadow-sm px-[18px] py-3 text-[12.5px] leading-relaxed"
-                                    style={{ background: 'var(--card-bg)', color: '#c2693f' }}
+                                    style={{ background: 'var(--card-bg)', color: 'var(--warn)' }}
                                   >
                                     这张美化卡的脚本试图向外部地址导航,已被掐断——不影响素颜原文,可疑的话去文具盒正则页把对应规则关掉
                                   </div>
@@ -3603,7 +3645,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                           ) : seg.text.trim() ? (
                             <div
                               key={`${f.key}-seg-${i}`}
-                              className="max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]"
+                              className="floor-ai max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]"
                             >
                               {/* 两态一律分块渲染保选区(为什么落库后也分块:见 chunkStreamText 头注释⚠️段) */}
                               {/* display:contents:分块 span 不生成行内盒,排版与单段文字等价(实验:iOS 内滚区下多 span 选区不画蓝) */}
@@ -3635,7 +3677,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                   )}
 
                   {f.variantsCount > 1 && (
-                    <div className="flex items-center gap-2.5 px-1.5 text-xs text-ink2">
+                    <div className="floor-meta flex items-center gap-2.5 px-1.5 text-xs text-ink2" onClick={(e) => e.stopPropagation()}>
                       <button
                         disabled={sending || mutCount > 0 || editingFloorKey !== null || variantBusy[f.key] || f.activeVariant <= 0}
                         onClick={() => switchVariant(f, f.activeVariant - 1)}
@@ -3649,7 +3691,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                       >▶</button>
                     </div>
                   )}
-                  {variantError && <div className="text-xs" style={{ color: '#c2693f' }}>{variantError}</div>}
+                  {variantError && <div className="text-xs" style={{ color: 'var(--warn)' }}>{variantError}</div>}
 
                   {reportOpenKeys.has(f.key) && <FloorReportView report={f.report} />}
                 </div>
@@ -3672,10 +3714,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           >
             <div
               className="max-w-2xl mx-auto flex items-start gap-3 text-sm rounded-2xl border px-4 py-3 shadow-md pointer-events-auto"
-              style={{ color: '#c2693f', borderColor: '#c2693f', background: 'var(--card-bg)' }}
+              style={{ color: 'var(--warn)', borderColor: 'var(--warn)', background: 'var(--card-bg)' }}
             >
               <span className="flex-1">{deskError}</span>
-              <button onClick={() => setDeskError('')} className="serc text-xs shrink-0 hover:opacity-70" style={{ color: '#c2693f' }}>知道了</button>
+              <button onClick={() => setDeskError('')} className="serc text-xs shrink-0 hover:opacity-70" style={{ color: 'var(--warn)' }}>知道了</button>
             </div>
           </div>
         )}
@@ -3738,7 +3780,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                   <div className="rounded-xl border border-dashed border-dash-line px-3 py-3 text-xs text-ink2">暂无时光带正文</div>
                 )}
                 <div className="flex items-center justify-end gap-3 mt-2.5">
-                  {timelineError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{timelineError}</span>}
+                  {timelineError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{timelineError}</span>}
                   <button
                     onClick={saveTimeline}
                     disabled={!timelineDirty || sending || timelineSaving || compressing || !timelineDraft.length}
@@ -3800,7 +3842,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 </div>
                 <span className="text-[11px] text-ink2">紧挨本楼输入,不再插进旧楼层</span>
                 <div className="ml-auto flex items-center gap-3">
-                  {noteError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{noteError}</span>}
+                  {noteError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{noteError}</span>}
                   <button onClick={() => setNoteOpen(false)} disabled={noteSaving} className="text-xs text-ink2 hover:text-ink-body">取消</button>
                   <button onClick={saveNote} disabled={noteSaving} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-4 py-1.5 disabled:opacity-40">
                     {noteSaving ? '保存中…' : '保存'}
@@ -3837,8 +3879,8 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                     title="按最近一条 AI 楼(改过之后的)正文重算一份状态板，填进草稿等你确认；后面跟着你的消息也能刷"
                     className="serc text-[11.5px] rounded-xl border px-3 py-1 disabled:opacity-40"
                     style={{
-                      color: refreshArm ? '#c0573f' : 'var(--ink-body)',
-                      borderColor: refreshArm ? '#c0573f' : 'var(--line-soft)',
+                      color: refreshArm ? 'var(--warn)' : 'var(--ink-body)',
+                      borderColor: refreshArm ? 'var(--warn)' : 'var(--line-soft)',
                       background: 'var(--card-bg)',
                     }}
                   >
@@ -3853,9 +3895,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                   不自动合并(宁明说不瞎猜),只给一条明路:看新板就整份重载(丢草稿),
                   想留改动就先复制出去,回头重新点开面板照抄回来 */}
               {boardConflict && (
-                <div className="flex items-center gap-3 flex-wrap mb-2.5 text-[11.5px] rounded-xl border px-3 py-2" style={{ color: '#c2693f', borderColor: '#c2693f', background: 'var(--card-bg)' }}>
+                <div className="flex items-center gap-3 flex-wrap mb-2.5 text-[11.5px] rounded-xl border px-3 py-2" style={{ color: 'var(--warn)', borderColor: 'var(--warn)', background: 'var(--card-bg)' }}>
                   <span className="flex-1">生成往板上写了新内容,你的草稿基于旧板——点"看新板"丢弃草稿重载,或复制你的改动后重来</span>
-                  <button onClick={viewNewBoard} className="serc shrink-0 rounded-lg border px-2.5 py-1" style={{ color: '#c2693f', borderColor: '#c2693f' }}>看新板(丢弃草稿)</button>
+                  <button onClick={viewNewBoard} className="serc shrink-0 rounded-lg border px-2.5 py-1" style={{ color: 'var(--warn)', borderColor: 'var(--warn)' }}>看新板(丢弃草稿)</button>
                 </div>
               )}
               {/* 重名/空名边打边校验(任务点4+7):topBadKeys 标顶层,每个object行自己的subBadKeys
@@ -3870,7 +3912,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                     <div className="rounded-2xl border border-dashed border-dash-line overflow-hidden">
                       {boardDraft.map((row, i) => {
                         const keyBad = topBadKeys.has(i);
-                        const keyInputCls = `serc w-24 flex-none rounded-lg border bg-page px-2 py-1 text-xs text-ink-body focus:outline-none disabled:opacity-50 ${keyBad ? 'border-[#c2693f]' : 'border-line-soft'}`;
+                        const keyInputCls = `serc w-24 flex-none rounded-lg border bg-page px-2 py-1 text-xs text-ink-body focus:outline-none disabled:opacity-50 ${keyBad ? 'border-[var(--warn)]' : 'border-line-soft'}`;
                         if (row.rawKind === 'object') {
                           const subRows = row.subRows || [];
                           const subBadKeys = findBadKeyIndexes(subRows);
@@ -3892,7 +3934,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                                   onClick={() => removeBoardRow(i)}
                                   disabled={sending || boardSaving || boardRefreshing}
                                   title="连这个键带下面所有子行一起删掉(保存前都是草稿)"
-                                  className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[#c2693f] disabled:opacity-30"
+                                  className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[var(--warn)] disabled:opacity-30"
                                 >删整项</button>
                               </div>
                               <div className="mt-1.5 ml-1 pl-2.5 border-l-2 border-dashed border-dash-line space-y-1.5">
@@ -3905,7 +3947,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                                         onChange={(e) => updateBoardSubRowKey(i, si, e.target.value)}
                                         placeholder="键名"
                                         disabled={sending || boardSaving || boardRefreshing}
-                                        className={`serc w-20 flex-none rounded-lg border bg-page px-2 py-1 text-[11px] text-ink-body focus:outline-none disabled:opacity-50 ${subKeyBad ? 'border-[#c2693f]' : 'border-line-soft'}`}
+                                        className={`serc w-20 flex-none rounded-lg border bg-page px-2 py-1 text-[11px] text-ink-body focus:outline-none disabled:opacity-50 ${subKeyBad ? 'border-[var(--warn)]' : 'border-line-soft'}`}
                                       />
                                       <input
                                         value={sr.value}
@@ -3928,7 +3970,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                                         onClick={() => onBoardSubDeleteClick(i, si, sr.id)}
                                         disabled={sending || boardSaving || boardRefreshing}
                                         title="删掉这一子行(保存前都是草稿)"
-                                        className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[#c2693f] disabled:opacity-30"
+                                        className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[var(--warn)] disabled:opacity-30"
                                       >{boardSubDelStage[sr.id] === 1 ? '确定删?' : '删'}</button>
                                     </div>
                                   );
@@ -3973,7 +4015,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                               onClick={() => removeBoardRow(i)}
                               disabled={sending || boardSaving || boardRefreshing}
                               title="删掉这一行(保存前都是草稿)"
-                              className="shrink-0 leading-none text-xs text-ink2 hover:text-[#c2693f] disabled:opacity-30"
+                              className="shrink-0 leading-none text-xs text-ink2 hover:text-[var(--warn)] disabled:opacity-30"
                             >删</button>
                           </div>
                         );
@@ -3982,9 +4024,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                     </div>
                     <div className="flex items-center gap-3 mt-2.5 flex-wrap">
                       <button onClick={addBoardRow} disabled={sending || boardSaving || boardRefreshing} className="text-xs text-ink2 hover:text-ink-body disabled:opacity-40">＋加一行</button>
-                      {boardHasKeyErrors && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>有键名是空的或者重复了,标红的那几格先改掉</span>}
+                      {boardHasKeyErrors && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>有键名是空的或者重复了,标红的那几格先改掉</span>}
                       <div className="ml-auto flex items-center gap-3">
-                        {boardError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{boardError}</span>}
+                        {boardError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{boardError}</span>}
                         <button onClick={closeBoardPanel} disabled={boardSaving} className="text-xs text-ink2 hover:text-ink-body">
                           {boardArm === 'close' ? '不保存关闭?再点一次' : '取消'}
                         </button>
@@ -4019,7 +4061,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 {dryrunLoading ? (
                   <div style={{ fontSize: 13, color: 'var(--ink2)' }}>正在裸跑装配…</div>
                 ) : dryrunError ? (
-                  <div style={{ fontSize: 13, color: '#c2693f' }}>{dryrunError}</div>
+                  <div style={{ fontSize: 13, color: 'var(--warn)' }}>{dryrunError}</div>
                 ) : dryrunReport ? (
                   <FloorReportView report={dryrunReport} />
                 ) : null}
@@ -4032,17 +4074,18 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
 
         {/* 底栏 portal 进壳的底槽(见 studyShell.tsx)。 */}
         {bottomEl && createPortal((
-        <footer ref={footerRef} className="chat-inputbar flex-none z-[2] bg-page/85 backdrop-blur border-t border-line-soft px-6 pt-4 pb-5 max-[760px]:px-3.5">
+        <footer ref={footerRef} className="chat-inputbar flex-none z-[2] bg-page/85 backdrop-blur border-t border-line-soft px-6 pt-4 pb-5 max-[760px]:px-3.5 max-[700px]:px-3 max-[700px]:pt-2 max-[700px]:pb-[10px]">
           {/* 服务端收尾进度话(status 事件):正文已经流完、done 还没来的那段(状态板自动补算约半分钟)给个交代 */}
           {sending && streamStatus && (
             <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">{streamStatus}</div>
           )}
-          <div className="max-w-2xl mx-auto flex items-end gap-2.5">
+          {/* 手机上折成两行:上一行 透视/纸条 两颗小钮,下一行 输入框铺满 + 发送;那颗空 span 是换行用的 */}
+          <div className="max-w-2xl mx-auto flex items-end gap-2.5 flex-wrap max-[700px]:gap-2">
             <button
               onClick={doDryrun}
               disabled={!curWindowId}
               title="透视下一楼(裸看装配结果,不真的发)"
-              className="serc rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center disabled:opacity-40"
+              className="desk-pill serc rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs"
             >
               透视
             </button>
@@ -4052,15 +4095,16 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
             <button
               onClick={toggleNoteDrawer}
               title="导演小纸条：给下一楼的临时指令"
-              className="serc relative rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center"
+              className="desk-pill serc relative rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs max-[700px]:mr-auto"
             >
               纸条
               {win?.note?.trim() && <span className="absolute top-1.5 right-1.5 w-[6px] h-[6px] rounded-full bg-accent" />}
             </button>
+            <span aria-hidden className="hidden max-[700px]:block max-[700px]:order-2 max-[700px]:basis-full max-[700px]:h-0" />
             {/* 这层relative容器专给@候选下拉当锚点——只裹textarea本体(flex-1从textarea挪到这层容器上,
                 textarea自己改w-full),不是整条footer行,这样浮层"锚在输入框正上方"才不会被
                 左边透视/纸条按钮、右边发送按钮的宽度带偏。 */}
-            <div className="relative flex-1">
+            <div className="relative flex-1 max-[700px]:order-3 max-[700px]:min-w-0">
               {/* @候选下拉(规格⑦):bottom-full+mb-2锚在输入框正上方;z-[3]沿用文件里既有的
                   "压过footer(z-[2])、不够贴头栏z-[8]/侧栏z-[9]"这套换算(小纸条/时光带那几处浮层同款),
                   抽屉更高不受影响。候选项的blur/click时序用"onMouseDown里preventDefault"——桌面上让
@@ -4092,7 +4136,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                   // 自然会带着最终文本重算一遍,不用另外再挂compositionend去重算。
                   if (!(e.nativeEvent as InputEvent).isComposing) recomputeAtMenu(e.currentTarget);
                 }}
-                onInput={(e) => grow(e.currentTarget, (e.nativeEvent as InputEvent).isComposing === true)}
+                onInput={(e) => grow(e.currentTarget, (e.nativeEvent as InputEvent).isComposing === true, composerCap())}
                 onSelect={(e) => { if (!composingRef.current) recomputeAtMenu(e.currentTarget); }}
                 onCompositionStart={() => { composingRef.current = true; setAtMenuOpen(false); }} // 组字一开始就收菜单:不给"组字中点旧候选"留窗口,指针路径的IME破坏面从根上封掉
                 onCompositionEnd={() => { composingRef.current = false; }}
@@ -4100,15 +4144,15 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 onBlur={() => setAtMenuOpen(false)}
                 rows={1}
                 placeholder="接着写点什么…"
-                className="w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto"
+                className="w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto max-[700px]:min-h-11 max-[700px]:py-[11px] max-[700px]:px-3.5 max-[700px]:rounded-2xl max-[700px]:text-[15px]"
               />
             </div>
             {sending && turnKind !== null ? (
-              <button onClick={() => abortRef.current?.abort()} className="serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center">
+              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
                 ■ 暂停
               </button>
             ) : (
-              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40">
+              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
                 发送
               </button>
             )}
@@ -4161,7 +4205,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
   // HeatBg 交给 page.tsx 那一份画,这里不重复画。
   return (
     <div style={{ position: 'relative', flex: '1 1 auto', boxSizing: 'border-box', background: 'var(--page-bg)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ flex: '1 1 auto', padding: '34px 28px 72px' }}>
+      <div className="desk-list" style={{ flex: '1 1 auto', padding: 'calc(34px + var(--safe-top, env(safe-area-inset-top, 0px))) 28px 72px' }}>
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
 
         {/* 下面 DeskDrawerHub 的点外部关闭用 absolute
@@ -4209,12 +4253,12 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           })}
         </div>
 
-        {winDelError && <div style={{ fontSize: 12.5, color: '#c2693f', marginBottom: 12 }}>{winDelError}</div>}
+        {winDelError && <div style={{ fontSize: 12.5, color: 'var(--warn)', marginBottom: 12 }}>{winDelError}</div>}
 
         {winListLoading ? (
           <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>正在翻这屋的窗户…</div>
         ) : winListError ? (
-          <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: '#c2693f' }}>翻不开：{winListError}</div>
+          <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--warn)' }}>翻不开：{winListError}</div>
         ) : windows.length === 0 ? (
           <div className="card" style={{ ...glassCardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>这个项目还没开过窗~点右上角开第一扇</div>
         ) : (
@@ -4228,7 +4272,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                     className="serc"
                     style={{
                       fontSize: 11, flex: 'none', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                      color: (winDelStage[w.id] || 0) === 1 ? '#c2693f' : 'var(--ink2)',
+                      color: (winDelStage[w.id] || 0) === 1 ? 'var(--warn)' : 'var(--ink2)',
                     }}
                   >
                     {(winDelStage[w.id] || 0) === 1 ? '真的删?再点一次' : '删除'}
@@ -4285,7 +4329,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 {wizRecipesLoading ? (
                   <div style={{ fontSize: 13, color: 'var(--ink2)', marginBottom: 22 }}>正在翻配方本…</div>
                 ) : wizRecipesError ? (
-                  <div style={{ fontSize: 13, color: '#c2693f', marginBottom: 22 }}>翻不开：{wizRecipesError}</div>
+                  <div style={{ fontSize: 13, color: 'var(--warn)', marginBottom: 22 }}>翻不开：{wizRecipesError}</div>
                 ) : wizMiniOpen ? (
                   <div style={{ marginBottom: 22, background: 'var(--scale-0)', borderRadius: 16, padding: '16px 18px' }}>
                     <div style={{ fontSize: 12.5, color: 'var(--ink2)', marginBottom: 10 }}>这个项目还没配方,就地建一份~</div>
@@ -4294,7 +4338,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                       {wizPresetsLoading ? (
                         <div style={{ fontSize: 12.5, color: 'var(--ink2)' }}>翻预设包…</div>
                       ) : wizPresetsError ? (
-                        <div style={{ fontSize: 12.5, color: '#c2693f' }}>{wizPresetsError}</div>
+                        <div style={{ fontSize: 12.5, color: 'var(--warn)' }}>{wizPresetsError}</div>
                       ) : wizPresets.length === 0 ? (
                         <div style={{ fontSize: 12.5, color: 'var(--ink2)' }}>还没导过预设包——去导入器先导一份(面板功能尚未提供,现在只能手动跑)</div>
                       ) : (
@@ -4318,7 +4362,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                           </button>
                         ))}
                       </div>
-                      {wizMiniError && <div style={{ fontSize: 12, color: '#c2693f' }}>{wizMiniError}</div>}
+                      {wizMiniError && <div style={{ fontSize: 12, color: 'var(--warn)' }}>{wizMiniError}</div>}
                       <button
                         onClick={createMiniRecipe}
                         disabled={wizMiniCreating || !wizMiniName.trim() || !wizMiniPresetId}
@@ -4345,7 +4389,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink2)', letterSpacing: 1.5, margin: '18px 0 8px' }}>③ 标题(可选)</div>
                     <input value={wizTitle} onChange={(e) => setWizTitle(e.target.value)} placeholder="不填就叫「未命名窗口」" style={{ ...inputStyle, marginBottom: 18 }} />
 
-                    {wizError && <div style={{ fontSize: 13, color: '#c2693f', marginBottom: 12 }}>{wizError}</div>}
+                    {wizError && <div style={{ fontSize: 13, color: 'var(--warn)', marginBottom: 12 }}>{wizError}</div>}
                     <button
                       onClick={createWindow}
                       disabled={!wizRecipeId || wizCreating}
