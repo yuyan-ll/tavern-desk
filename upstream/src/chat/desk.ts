@@ -25,6 +25,7 @@ import { AnthropicStreamBackend } from '../adapters/streamModelBackends.ts';
 import type { ModelBackend } from '../core/modelBackend.ts';
 import { validateDeskChannelConfig } from '../core/deskChannelConfig.ts';
 import { DEFAULT_THINKING_TAGS } from '../tools/deskThinkingTags.ts';
+import { isDeskAsideMessage, isDeskAsideFloor } from '../core/deskAside.ts';
 
 interface DeskChatEnv {
   OC_DB: D1Database;
@@ -215,6 +216,8 @@ export async function handleDeskChat(
   let assembleFloors: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   let assembleInput = '';
   const mode: 'normal' | 'roll' = roll ? 'roll' : 'normal';
+  // 桌边话(见 core/deskAside.ts):本轮用户楼是桌边话,回楼也记 aside。
+  let aside = false;
   // roll 优先使用目标楼当初的 boardBefore；老数据再回溯前一 assistant 的 boardAfter。
   let rollStateBoard: any = null;
   let foundRollBoard = false;
@@ -222,8 +225,9 @@ export async function handleDeskChat(
   if (mode === 'normal') {
     userFloorId = genId('fl');
     const now0 = new Date().toISOString();
+    aside = isDeskAsideMessage(message);
     try {
-      await deskStorage.createFloor({ id: userFloorId, windowId, role: 'user', content: message, variants: [message], activeVariant: 0, thinking: null, report: {}, createdAt: now0 });
+      await deskStorage.createFloor({ id: userFloorId, windowId, role: 'user', content: message, variants: [message], activeVariant: 0, thinking: null, report: aside ? { aside: true } : {}, createdAt: now0 });
     } catch (e: any) {
       return errJson(`存用户楼层失败: ${e.message}`, 500);
     }
@@ -259,6 +263,8 @@ export async function handleDeskChat(
         // boardAfter 键在,但值是 null/数组/字符串等畸形:这楼当时也没有有效板,继续往前找上一条assistant楼
       }
     }
+    // 重 roll 的回楼跟着它回应的那条 user 楼算;前面没有 user 楼(手改造出来的边角)就沿用目标楼自己的标记。
+    aside = isDeskAsideFloor(beforeLast.length && beforeLast[beforeLast.length - 1].role === 'user' ? beforeLast[beforeLast.length - 1] : lastFloor);
     let hist = beforeLast;
     if (beforeLast.length && beforeLast[beforeLast.length - 1].role === 'user') {
       assembleInput = beforeLast[beforeLast.length - 1].content;
@@ -325,7 +331,7 @@ export async function handleDeskChat(
     const boardBeforeTrusted = mode === 'normal' || foundRollBoard;
     // stateBoardGateErrors 只在"解析成功但被闸拒"时落report,给前端说清弃用原因(纯解析失败仍走老文案)
     const hasUsage = !!usageActual && (usageActual.input + usageActual.output + usageActual.cache_read + usageActual.cache_write) > 0;
-    const reportOut = { ...report, stateBoardStale: !boardUsable, ...(boardGateErrors.length ? { stateBoardGateErrors: boardGateErrors } : {}), ...(boardBeforeTrusted ? { boardBefore: effectiveStateBoard } : {}), ...(hasUsage ? { usageActual } : {}), boardAfter: appliedBoard };
+    const reportOut = { ...report, stateBoardStale: !boardUsable, ...(boardGateErrors.length ? { stateBoardGateErrors: boardGateErrors } : {}), ...(boardBeforeTrusted ? { boardBefore: effectiveStateBoard } : {}), ...(hasUsage ? { usageActual } : {}), boardAfter: appliedBoard, ...(aside ? { aside: true } : {}) };
     let floorId = '';
     let floorCreatedAt = '';
     let committedReport: Record<string, unknown> | null = null;
