@@ -60,9 +60,9 @@ const ASIDE_IN = ['桌边:这段节奏是不是太快了?', '桌边\n先别写,�
 const ASIDE_OUT = ['桌边回答一:是有点快,可以把雨写长一点。', '桌边回答二:她还不知道。'];
 const prose = (i: number) => `正文${'一二三四五六'[i]}——灯下的影子挪了一寸。`;
 
-test('判据:trim 后以「桌边」开头;标记只认 report.aside', () => {
-  for (const m of ['桌边', '桌边:节奏', '桌边：节奏', '桌边 节奏', '桌边\n节奏', '桌边节奏', '  桌边\t节奏  ']) assert.equal(isDeskAsideMessage(m), true, m);
-  for (const m of ['', '她在桌边坐下', '#桌边', ' 桌 边']) assert.equal(isDeskAsideMessage(m), false, m);
+test('判据:trim 后以「桌边」开头且后面跟冒号 / 逗号 / 空白 / 换行(或只有这两个字);直接接正文的是戏;标记只认 report.aside', () => {
+  for (const m of ['桌边', '桌边:节奏', '桌边：节奏', '桌边,节奏', '桌边，节奏', '桌边 节奏', '桌边\n节奏', '  桌边\t节奏  ']) assert.equal(isDeskAsideMessage(m), true, m);
+  for (const m of ['', '桌边节奏', '桌边的烛火晃了一下', '桌边一盏灯', '她在桌边坐下', '#桌边', ' 桌 边']) assert.equal(isDeskAsideMessage(m), false, m);
   assert.equal(isDeskAsideFloor({ report: { aside: true } }), true);
   assert.equal(isDeskAsideFloor({ report: '{"aside":true}' }), true);
   assert.equal(isDeskAsideFloor({ report: { aside: 'true' } }), false);
