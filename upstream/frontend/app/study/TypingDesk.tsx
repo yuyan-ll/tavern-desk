@@ -1165,6 +1165,110 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
   }
   useEffect(() => () => { if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current); }, []);
 
+  // ── 掉线不丢楼:手机断了电脑照写(后端 chat/deskTurns.ts),只有暂停键才停。断了以后每 3 秒问一声
+  // 「这扇窗还在写吗」,切回前台立刻问;不写了就重新载入窗口,那一楼就在了。进窗也问一声:划掉 app
+  // 再打开、电脑那边还没写完的时候,一样等着接。
+  // expect:断线那一刻手上知道的事,收尾时拿它判断这一楼到底写没写成,写成了把还给输入框的字收回去。
+  type RemoteExpect = { kind: 'send'; msg: string; lastAssistantId: string | null } | { kind: 'roll'; floorId: string; variants: number };
+  const [remoteWriting, setRemoteWriting] = useState(false);
+  const remoteWritingRef = useRef(false);
+  const remoteWatchSeqRef = useRef(0);
+  const remoteWatchRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; tick: () => void } | null>(null);
+  // 盯着的时候贴过的横幅(409 那句),接回来以后撤掉;别的横幅不碰
+  const remoteBannerRef = useRef('');
+  function setRemoteWritingBoth(v: boolean) { remoteWritingRef.current = v; setRemoteWriting(v); }
+  function stopRemoteWatch() {
+    const w = remoteWatchRef.current;
+    if (w?.timer) clearTimeout(w.timer);
+    remoteWatchRef.current = null;
+    remoteWatchSeqRef.current++;
+    setRemoteWritingBoth(false);
+  }
+  function watchRemoteTurn(myGen: number, windowId: string, opts: { firstDelay?: number; expect?: RemoteExpect; banner?: string } = {}) {
+    stopRemoteWatch();
+    const tok = remoteWatchSeqRef.current;
+    const startedAt = Date.now();
+    let sawRunning = false;
+    remoteBannerRef.current = opts.banner || '';
+    const alive = () => remoteWatchSeqRef.current === tok && genRef.current === myGen;
+    const w: { timer: ReturnType<typeof setTimeout> | null; tick: () => void } = { timer: null, tick: () => {} };
+    const finish = async () => {
+      remoteWatchRef.current = null;
+      setRemoteWritingBoth(false);
+      let landed: boolean | null = null;
+      try {
+        const res = await fetch(`${base}/api/oc/desk/windows/${windowId}`, { cache: 'no-store' });
+        const d = await res.json().catch(() => null);
+        const fl: Array<{ id: string; role: string; content?: string; variants_count?: number }> = d && d.success === true && Array.isArray(d.floors) ? d.floors : [];
+        if (!alive() || !fl.length) throw new Error('skip');
+        const exp = opts.expect;
+        if (exp?.kind === 'send') {
+          const last = fl[fl.length - 1];
+          landed = last.role === 'assistant' && last.id !== exp.lastAssistantId;
+          // 用户楼其实存上了、只是确认没传回来:还给输入框的那句收回去,免得重发一遍
+          const lastUser = [...fl].reverse().find((f) => f.role === 'user');
+          if (lastUser && String(lastUser.content || '').trim() === exp.msg && inputRef.current.trim() === exp.msg) {
+            setInput('');
+            try { localStorage.setItem(`oc_desk_draft_${windowId}`, ''); } catch {}
+          }
+        } else if (exp?.kind === 'roll') {
+          const f = fl.find((x) => x.id === exp.floorId);
+          landed = !!f && typeof f.variants_count === 'number' && f.variants_count > exp.variants;
+        }
+      } catch { /* 读不到就只重载,不下结论 */ }
+      if (!alive()) return;
+      const banner = remoteBannerRef.current;
+      remoteBannerRef.current = '';
+      if (landed === false) setDeskError('电脑那边这一楼没写成(模型出错或被停了),这轮没存档;可以重发或重 roll');
+      else if (banner) setDeskError((cur) => (cur === banner ? '' : cur));
+      loadWindow(windowId, true, myGen).catch(() => {});
+    };
+    const tick = async () => {
+      w.timer = null;
+      if (!alive()) return;
+      let running = true; // 问不到(网还没回来)就当还在写,接着等
+      try {
+        const res = await fetch(`${base}/api/oc/desk/running?window_id=${encodeURIComponent(windowId)}`, { cache: 'no-store' });
+        const d = await res.json().catch(() => null);
+        if (res.ok && d && d.success === true) running = d.running === true;
+        else if (res.status === 404) running = false; // 宿主还是旧版、没有这个口子:不等了
+      } catch { /* 接着等 */ }
+      if (!alive()) return;
+      // 一楼最长也就十来分钟;问了二十分钟还说在写,不陪它耗了
+      if (running && Date.now() - startedAt < 20 * 60_000) {
+        sawRunning = true;
+        setRemoteWritingBoth(true);
+        w.timer = setTimeout(w.tick, 3000);
+        return;
+      }
+      // 只是进窗/暂停后顺手问一声、电脑那边本来就没在写:什么都不用做
+      if (!opts.expect && !opts.banner && !sawRunning) { remoteWatchRef.current = null; return; }
+      await finish();
+    };
+    w.tick = () => { void tick(); };
+    remoteWatchRef.current = w;
+    w.timer = setTimeout(w.tick, opts.firstDelay ?? 0);
+  }
+  // 切回前台:正在等的话立刻问一声,不等那 3 秒
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const w = remoteWatchRef.current;
+      if (w && w.timer) { clearTimeout(w.timer); w.timer = null; w.tick(); }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { document.removeEventListener('visibilitychange', onVisible); stopRemoteWatch(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // 暂停:先叫电脑那边停(那一楼不落库),再断自己的流。「停」没送到也没关系,下面的收尾会盯着接回来。
+  function pauseTurn() {
+    const windowId = curWindowIdRef.current;
+    if (windowId && envOk) {
+      fetch(`${base}/api/oc/desk/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ window_id: windowId }) }).catch(() => {});
+    }
+    abortRef.current?.abort();
+  }
+
   // ── 下行正则规则表——窗口(win)首次装载完整后拉一次,downRulesFetchedForRef 挡住同一扇窗
   // 后续 gentle reload 触发的重复请求(win 对象引用每次 reload 都换,但 id 不变——挡的是 id,不是引用)。
   // 两口请求:①配方列表(项目维度,现有后端没有"单个配方"端点,借列表反查 preset_id) ②正则全表
@@ -1259,6 +1363,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     setBeautifyOverrides(loadBeautifyOverrides(id));
     setMode('write');
     loadWindow(id, false, genRef.current);
+    watchRemoteTurn(genRef.current, id); // 划掉 app 再进来、电脑那边还没写完:接着等
     try { const d = localStorage.getItem(`oc_desk_draft_${id}`); setInput(d || ''); } catch { setInput(''); }
   }
   async function backToList() {
@@ -1291,6 +1396,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     setTurnKind(null);
     setDeskError('');
     if (resyncTimerRef.current) { clearTimeout(resyncTimerRef.current); resyncTimerRef.current = null; }
+    stopRemoteWatch();
     // 回列表也是世界翻篇,dryrun 在飞的话同样要杀令牌+复位,
     // 不然下次进任何窗透视都被卡死的 dryrunLoading 拦住。
     dryrunSeqRef.current++;
@@ -1566,7 +1672,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
   // ── SSE 消费(同编辑部 callChat 的 data: 行解析,desk 没有工具事件,usage/ping 不用管) ──
   // FIX1:不再"读完循环就当成功"——显式收口成 outcome,done 事件才算体面终态,
   // error 事件/没等到 done 就 EOF/fetch或读流本身炸了(含 abort),一律算 error,绝不裸 resolve "ok"。
-  type StreamOutcome = { done: true; floorId?: string } | { error: string; aborted?: boolean };
+  // disconnected:'before'=压根没连上(fetch 本身炸了),'during'=字已经在路上、连接半路断了(安卓切后台、
+  // 锁屏、换网都是这种)。busy=宿主说这扇窗上一楼还在写(409)。后两种电脑那边可能还在写,要盯着接回来。
+  type StreamOutcome = { done: true; floorId?: string } | { error: string; aborted?: boolean; disconnected?: 'before' | 'during'; busy?: boolean };
   async function streamChat(body: any, handlers: {
     onUserSaved?: (id: string) => void;
     onText?: (t: string) => void;
@@ -1580,7 +1688,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') return { error: '已暂停', aborted: true };
-      return { error: `连接断了：${err?.message || err}` };
+      return { error: `连接断了：${err?.message || err}`, disconnected: 'before' };
     }
     // 无声守卫排查(实测撞到的洞:删配方没查窗口引用,窗口还钉着旧recipe_id,重roll时后端
     // assembleDesk 装配失败返回 HTTP 500 + {success:false, error:'配方不存在: ...'}这样的JSON体——
@@ -1593,7 +1701,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
         const eb = await res.json();
         if (eb && typeof eb.error === 'string' && eb.error) msg = eb.error;
       } catch { /* 非JSON错误体(网关级故障等),退回HTTP状态码文案 */ }
-      return { error: msg };
+      return res.status === 409 ? { error: msg, busy: true } : { error: msg };
     }
     if (!res.body) return { error: '响应没有内容(服务端异常)' };
     const reader = res.body.getReader();
@@ -1624,11 +1732,11 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return { error: '已暂停', aborted: true };
-      return { error: `连接断了：${err?.message || err}` };
+      return { error: `连接断了：${err?.message || err}`, disconnected: 'during' };
     }
     // 读到 EOF 但压根没收到 done/error——流断在半道,同样不算体面收尾(desk.ts writer.close() 前
     // 一定会先发 done 或 error,读到这里说明连接被腰斩,不是服务端的正常收尾)
-    return { error: '流断在半道,没收到结束信号' };
+    return { error: '流断在半道,没收到结束信号', disconnected: 'during' };
   }
 
   // ── ①普通发送 ──
@@ -1657,8 +1765,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     // 互斥只有单向:换配方PUT在飞时同理不许起新生成——正在换的这个recipe_id
     // 可能这楼装配就要用上,读ref理由同上面boardSavingRef那行。
     if (recipeSwitchingRef.current) { setDeskError('配方切换中,稍等一两秒再试'); return; }
+    if (remoteWritingRef.current) { setDeskError('上一楼电脑那边还在写,写完会自己出现'); return; }
     if (composerRef.current) composerRef.current.style.height = 'auto';
     const windowId = curWindowId;
+    const lastAssistantId = [...floorsRef.current].reverse().find((x) => x.role === 'assistant')?.id ?? null;
     const myGen = genRef.current;
     sendingRef.current = true;
     pinnedRef.current = true; // 自己发消息=想看新楼,强制重钉(钉底机制见 pinnedRef 声明处)
@@ -1727,10 +1837,16 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           // 不需要 composerUntouched 那套兜底,原样保留原逻辑。
           setFloors((prev) => prev.filter((x) => x.key !== asgKey));
         }
-        if (!outcome.aborted && myGen === genRef.current) setDeskError(bannerMsg); // 主动暂停不算"出错",不吓到人
+        // 半路断线:电脑那边接着写,不贴吓人的错误横幅,输入框上方那行字说明情况、盯着接回来。
+        // 例外是那条"原文帖在横幅里"的兜底——那时这句话只在横幅里,不能不贴。
+        const remote = outcome.disconnected === 'during';
+        if (!outcome.aborted && (!remote || bannerMsg !== outcome.error) && myGen === genRef.current) setDeskError(bannerMsg); // 主动暂停不算"出错",不吓到人
         if (myGen === genRef.current) {
           loadWindow(windowId, true, myGen).catch(() => {});
-          if (!outcome.aborted) scheduleResync(myGen, windowId, 2500); // 真出错兜个延迟对账(ctx.waitUntil 可能还在跑)
+          if (remote) watchRemoteTurn(myGen, windowId, { expect: { kind: 'send', msg, lastAssistantId } });
+          else if (outcome.busy || outcome.disconnected === 'before') watchRemoteTurn(myGen, windowId, { banner: outcome.busy ? bannerMsg : undefined });
+          else if (outcome.aborted) watchRemoteTurn(myGen, windowId, { firstDelay: 1500 }); // 「停」万一没送到,电脑那边还在写,照样接回来
+          else scheduleResync(myGen, windowId, 2500); // 真出错兜个延迟对账(ctx.waitUntil 可能还在跑)
         }
       }
 
@@ -1766,6 +1882,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
     if (boardSavingRef.current) { setDeskError('状态板保存中,稍等一两秒再试'); return; } // 同 send() 那道闸,读ref理由见那边注释
     if (timelineSavingRef.current) { setDeskError('时光带保存中,稍等一两秒再试'); return; }
     if (recipeSwitchingRef.current) { setDeskError('配方切换中,稍等一两秒再试'); return; } // 同上
+    if (remoteWritingRef.current) { setDeskError('上一楼电脑那边还在写,写完会自己出现'); return; }
     const windowId = curWindowId;
     const myGen = genRef.current;
     sendingRef.current = true;
@@ -1800,10 +1917,14 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
         } else {
           patchFloor(myGen, f.key, (fl) => ({ ...fl, streaming: false })); // 快照丢了(理论不该发生)的防御性兜底,至少别卡在流式态
         }
-        if (!outcome.aborted && myGen === genRef.current) setDeskError(outcome.error);
+        const remote = outcome.disconnected === 'during';
+        if (!outcome.aborted && !remote && myGen === genRef.current) setDeskError(outcome.error);
         if (myGen === genRef.current) {
           loadWindow(windowId, true, myGen).catch(() => {});
-          if (!outcome.aborted) scheduleResync(myGen, windowId, 2500);
+          if (remote && f.id) watchRemoteTurn(myGen, windowId, { expect: { kind: 'roll', floorId: f.id, variants: f.variantsCount } });
+          else if (outcome.busy || outcome.disconnected === 'before') watchRemoteTurn(myGen, windowId, { banner: outcome.busy ? outcome.error : undefined });
+          else if (outcome.aborted) watchRemoteTurn(myGen, windowId, { firstDelay: 1500 });
+          else scheduleResync(myGen, windowId, 2500);
         }
       }
       floorSnapshotRef.current = null;
@@ -4092,6 +4213,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
           {sending && streamStatus && (
             <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">{streamStatus}</div>
           )}
+          {!sending && remoteWriting && (
+            <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">电脑那边还在写这一楼,写完会自己出现</div>
+          )}
           {/* 手机上折成两行:上一行 透视/纸条 两颗小钮,下一行 输入框铺满 + 发送;那颗空 span 是换行用的 */}
           <div className="max-w-2xl mx-auto flex items-end gap-2.5 flex-wrap max-[700px]:gap-2">
             <button
@@ -4164,11 +4288,11 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
               />
             </div>
             {sending && turnKind !== null ? (
-              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+              <button onClick={pauseTurn} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
                 ■ 暂停
               </button>
             ) : (
-              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+              <button onClick={() => send()} disabled={!input.trim() || sending || remoteWriting || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
                 发送
               </button>
             )}

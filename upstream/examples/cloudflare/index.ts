@@ -33,6 +33,7 @@ import { deskDryrun } from '../../src/chat/deskAssemble';
 import { maybeFoldDeskTimeline } from '../../src/chat/deskTimeline';
 import { deskBoardRefresh } from '../../src/chat/deskBoardRefresh';
 import { handleDeskChat, type DeskChatStorage } from '../../src/chat/desk';
+import { isDeskTurnRunning, stopDeskTurn } from '../../src/chat/deskTurns';
 
 interface Env extends AuthEnv {
   OC_DB: D1Database;
@@ -687,6 +688,20 @@ async function handleDeskAdmin(request: Request, env: Env, url: URL, ctx: Execut
     if ('resp' in read) return read.resp;
     const storage: DeskChatStorage = { deskStorage: new D1DeskStorage(env.OC_DB), turnStorage: new D1DeskTurnStorage(env.OC_DB), ...deskAssemblyStorage(env) };
     return handleDeskChat(env as any, read.body, storage, request.signal, (promise) => ctx.waitUntil(promise));
+  }
+
+  // 手机掉线不停写(见 chat/deskTurns.ts):暂停键走「停」,手机回来问「还在写吗」,不在写了就重新载入窗口。
+  if (url.pathname === '/api/oc/desk/stop' && request.method === 'POST') {
+    const read = await deskReadJsonLimited(request);
+    if ('resp' in read) return read.resp;
+    const windowId = typeof read.body?.window_id === 'string' ? read.body.window_id.trim() : '';
+    if (!windowId) return json(request, env, { success: false, error: 'window_id 必填' }, 400);
+    return json(request, env, { success: true, stopped: stopDeskTurn(windowId) });
+  }
+  if (url.pathname === '/api/oc/desk/running' && request.method === 'GET') {
+    const windowId = (url.searchParams.get('window_id') || '').trim();
+    if (!windowId) return json(request, env, { success: false, error: 'window_id 必填' }, 400);
+    return json(request, env, { success: true, running: isDeskTurnRunning(windowId) });
   }
 
   return null;
