@@ -122,9 +122,9 @@ R=$(curl -s -X POST "$B/recipes" -H 'content-type: application/json' -d "{\"name
 W=$(curl -s -X POST "$B/windows" -H 'content-type: application/json' -d "{\"project\":\"试跑\",\"recipe_id\":\"$R\"}" | id)
 
 # 推一楼:SSE 里能看到 user_saved、text、usage、done 帧
-curl -N -X POST "$B/chat" -H 'content-type: application/json' -d "{\"window_id\":\"$W\",\"message\":\"她推开门。\"}"
+curl -sN -X POST "$B/chat" -H 'content-type: application/json' -d "{\"window_id\":\"$W\",\"message\":\"她推开门。\"}"
 # 推一楼桌边话
-curl -N -X POST "$B/chat" -H 'content-type: application/json' -d "{\"window_id\":\"$W\",\"message\":\"桌边:这段节奏是不是太快了\"}"
+curl -sN -X POST "$B/chat" -H 'content-type: application/json' -d "{\"window_id\":\"$W\",\"message\":\"桌边:这段节奏是不是太快了\"}"
 # 看楼层:后两楼的 report 里有 "aside": true
 curl -s "$B/windows/$W"
 ```
