@@ -210,15 +210,23 @@ html[data-glass="1"] .sty-stage-scroll {
     var(--page-bg);
   background-attachment: fixed;
 }
+/* 玻璃的边:原来每一片都是 1px、--g-rim(亮色墙纸上七成白)的整圈边框,米纸底上看着就是一道道白线圈,
+   她说不好看。现在边框一律透明(宽度留着,尺寸、布局一像素不动),边缘的光改用内阴影画:左上一道柔光、
+   右下一道更淡的,四周不再一样亮,不成圈。光的颜色跟着 --g-hi 走,暗色墙纸自动收淡。 */
+html[data-glass="1"] {
+  --lg-edge:
+    inset 1.5px 1.5px 1px -0.5px color-mix(in srgb, var(--g-hi) 78%, transparent),
+    inset -1px -1px 1px -0.5px color-mix(in srgb, var(--g-hi) 32%, transparent);
+}
 html[data-glass="1"] .glass,
 html[data-glass="1"] .desk-header,
 html[data-glass="1"] .chat-inputbar {
   background: var(--g-fill) !important;
-  border: 1px solid var(--g-rim) !important;
+  border: 1px solid transparent !important;
   /* 只写标准属性:构建期 lightningcss 见到手写的 -webkit- 前缀会把不带前缀的那句丢掉,
      安卓/Chrome 就一点糊都没有了;前缀交给它按目标浏览器自己补。 */
   backdrop-filter: blur(24px) saturate(180%);
-  box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 10px 30px var(--g-shadow), var(--lg-edge) !important;
 }
 /* ⋯ 菜单挂在头栏里面,头栏自己是一片毛玻璃,子元素的 backdrop-filter 只能糊到头栏那一层、
    糊不到压在底下的正文(规范里叫 backdrop root);所以菜单不靠糊,直接铺实底的卡片色。
@@ -226,8 +234,8 @@ html[data-glass="1"] .chat-inputbar {
    子元素在 Chromium 里合成得不一样),干脆不透。 */
 html[data-glass="1"] .desk-menu {
   background: var(--card-bg) !important;
-  border: 1px solid var(--g-rim) !important;
-  box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 10px 30px var(--g-shadow), var(--lg-edge) !important;
 }
 html[data-glass="1"] .desk-header { border-radius: 24px !important; }
 html[data-glass="1"] .chat-inputbar { border-radius: 26px !important; }
@@ -235,8 +243,8 @@ html[data-glass="1"] .desk-pill,
 html[data-glass="1"] .desk-header .pill,
 html[data-glass="1"] .chat-inputbar textarea {
   background: var(--g-fill2) !important;
-  border: 1px solid var(--g-rim) !important;
-  box-shadow: inset 0 1px 0 var(--g-hi) !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 1px 4px var(--g-shadow), var(--lg-edge) !important;
 }
 /* 按下的小钮(桌边钮亮着)玻璃模式下也得看得出来:上面那条把 .desk-pill 的底色一律盖成玻璃 */
 html[data-glass="1"] .desk-pill[aria-pressed="true"] {
@@ -275,9 +283,9 @@ html[data-glass="1"] .floor-user::before {
 }
 html[data-glass="1"] .card {
   background: var(--g-card) !important;
-  border: 1px solid var(--g-rim) !important;
-  backdrop-filter: blur(18px) saturate(170%);
-  box-shadow: 0 8px 26px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
+  border: 1px solid transparent !important;
+  backdrop-filter: blur(18px) saturate(180%);
+  box-shadow: 0 8px 26px var(--g-shadow), var(--lg-edge) !important;
 }
 /* 写作窗:头栏、底栏浮在滚动区上,滚动区按量出来的高度留边 */
 html[data-glass="1"] .sty-main.desk-writing .sty-stage-top {

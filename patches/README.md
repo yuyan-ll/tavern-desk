@@ -20,6 +20,7 @@
 | 012-桌边钮 | 10-12 她点的 | `frontend/app/study/TypingDesk.tsx`(纸条旁边「桌边」钮,亮着发送时安上「桌边：」,亮灭按窗记本机)、`frontend/app/globals.css`(玻璃模式下按下的小钮铺强调色) |
 | 013-气泡液态玻璃 | 10-12 她点的 | `frontend/app/globals.css`(玻璃模式下她的气泡:拿掉整圈白边,半透明底 + 斜光 + 只在左上右下渐隐的 1px 高光环) |
 | 014-合写者 | 10-12 她点的 | `frontend/app/study/TypingDesk.tsx`(⋯ 菜单「合写者」小窗:名字进 `vars.user` 即预设里的 {{user}},设定进 `vars.persona_description` 即「合写者的角色」那一格;保存前先取服务端 vars 再改这两个键) |
+| 015-玻璃去白圈 | 10-12 她说的 | `frontend/app/globals.css`(玻璃模式下头栏、输入区、小钮、输入框、⋯ 菜单、卡片的整圈白边改透明,边上的光改成 `--lg-edge` 两道内阴影:左上亮、右下淡) |
 
 007 说明:施工单四.5 写的是 ChaptersStudio「从楼层收章节的地方」,但 16b7abd 的 ChaptersStudio
 没有从楼层收章节的入口(章节是手填的),楼层变成稿子只有打字桌 ⋯ 菜单「导出正文」这一条路,
