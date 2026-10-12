@@ -393,6 +393,15 @@ function chunkStreamText(s: string): string[] {
   }
   return out;
 }
+// ── 正文分段(只管显示,落库/导出的 f.content 一字不动):按空行切成段,每段一个块级 span,
+// 段距由 .floor-p 管(globals.css 桌面 1.9em = 以前一个空行的高度;page.tsx 手机上收到 0.7em)。
+// 以前整楼一个 pre-wrap 文本节点,段与段之间靠一整个空行撑开,手机上她嫌太宽;协议块(<title>…)
+// 折起来之后紧跟的几个空行也一并吞掉,不再在折叠签下面留一大截空白。
+// 跟上面分块的约定兼容:段的边界只取决于前缀里有没有出现空行,流式追加不会挪已有边界,
+// 每段内部再走 chunkStreamText,前面段的文本节点原样不动,选区活得下来。
+function splitParagraphs(s: string): string[] {
+  return s.replace(/^\n+/, '').replace(/\n+$/, '').split(/\n{2,}/).filter((p) => p.length > 0);
+}
 
 // ── 每楼下方的动作条(编辑/复制/透视/楼层号/时间戳)。user 楼层和 assistant 楼层共用同一条,
 // 靠 isAssistant 挑行为——挂在模块顶层而不是 write 屏渲染函数内部,免得每次 .map() 迭代都现造一个
@@ -3647,9 +3656,13 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                               key={`${f.key}-seg-${i}`}
                               className="floor-ai max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]"
                             >
-                              {/* 两态一律分块渲染保选区(为什么落库后也分块:见 chunkStreamText 头注释⚠️段) */}
+                              {/* 先按空行切段(splitParagraphs,段距见 .floor-p),段内再分块渲染保选区(为什么落库后也分块:见 chunkStreamText 头注释⚠️段) */}
                               {/* display:contents:分块 span 不生成行内盒,排版与单段文字等价(实验:iOS 内滚区下多 span 选区不画蓝) */}
-                              {chunkStreamText(seg.text).map((c, ci) => <span key={ci} style={{ display: 'contents' }}>{c}</span>)}
+                              {splitParagraphs(seg.text).map((para, pi) => (
+                                <span key={pi} className="floor-p" style={{ display: 'block' }}>
+                                  {chunkStreamText(para).map((c, ci) => <span key={ci} style={{ display: 'contents' }}>{c}</span>)}
+                                </span>
+                              ))}
                             </div>
                           ) : null
                         )}
@@ -4144,15 +4157,18 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; 
                 onBlur={() => setAtMenuOpen(false)}
                 rows={1}
                 placeholder="接着写点什么…"
-                className="w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto max-[700px]:min-h-11 max-[700px]:py-[11px] max-[700px]:px-3.5 max-[700px]:rounded-2xl max-[700px]:text-[15px]"
+                // block:textarea 默认是行内块,坐在基线上,底下会多出一截字母下伸的空隙(量过:8px),
+                // 整条输入行 items-end 对齐的是那个空隙的底,输入框本体就比发送钮浮高一截——她说的「没对齐」。
+                // 手机上行高 24 + 上下各 10 + 边 2 = 46,跟发送钮同高。
+                className="block w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto max-[700px]:min-h-[46px] max-[700px]:leading-6 max-[700px]:py-[10px] max-[700px]:px-3.5 max-[700px]:rounded-2xl max-[700px]:text-[15px]"
               />
             </div>
             {sending && turnKind !== null ? (
-              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
                 ■ 暂停
               </button>
             ) : (
-              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
                 发送
               </button>
             )}
