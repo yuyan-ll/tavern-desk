@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 跟书房默认色板一致(globals.css 里的 page-bg),冷启动时不闪白。 -->
+    <color name="desk_page">#F4F6EE</color>
+    <color name="desk_ink">#2F3A26</color>
+    <color name="desk_ink2">#7A8670</color>
+    <color name="desk_accent">#6F9E4A</color>
+
+    <style name="Theme.TavernDesk" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/desk_page</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>
