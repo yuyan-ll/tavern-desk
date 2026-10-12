@@ -129,41 +129,120 @@ test('宿主:试跑模式推一楼,SSE 有 text 和 done;垫的段在最前面',
   } finally { await run.stop(); }
 });
 
-test('宿主:SSE 不攒——模型还在写,前面的帧已经到了;客户端断开 → 模型那头收到 abort', async () => {
+// 一个卡在闸门上的假模型:先吐一段字,等 release() 才收尾;收到 abort 就当场以 aborted 收尾。
+function gatedModel() {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const state = { calls: 0, sawAbort: false };
+  const backend: ModelBackend = {
+    async streamChat(args: StreamChatArgs) {
+      state.calls++;
+      await args.onEvent?.({ type: 'text', text: '先到的字' });
+      const aborted = new Promise<void>((r) => {
+        if (args.signal?.aborted) r();
+        args.signal?.addEventListener('abort', () => { state.sawAbort = true; r(); }, { once: true });
+      });
+      await Promise.race([gate, aborted]);
+      return args.signal?.aborted ? { ok: false, kind: 'aborted' } : CLEAN;
+    },
+  };
+  return { backend, release, state };
+}
+
+// 发一楼,读到「先到的字」为止,返回还开着的连接。
+async function startTurn(base: string, windowId: string) {
+  const controller = new AbortController();
+  const res = await fetch(`${base}/${TOKEN}/api/oc/desk/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ window_id: windowId, message: 'x' }), signal: controller.signal });
+  assert.equal(res.status, 200);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let seen = '';
+  while (!seen.includes('先到的字')) {
+    const { value, done } = await reader.read();
+    assert.equal(done, false, '模型没写完之前流不该结束');
+    seen += decoder.decode(value, { stream: true });
+  }
+  return { controller, reader };
+}
+
+const running = async (base: string, windowId: string) => (await api(base, `/desk/running?window_id=${encodeURIComponent(windowId)}`)).running;
+
+async function until(check: () => boolean | Promise<boolean>, what: string, ms = 5000): Promise<void> {
+  const t0 = Date.now();
+  while (!(await check())) {
+    if (Date.now() - t0 > ms) throw new Error(`${ms}ms 内没等到:${what}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+test('宿主:SSE 不攒;手机中途断开,模型照写,这一楼照常落库', async () => {
   const run = await start();
+  const model = gatedModel();
   try {
     const windowId = await makeWindow(run.base);
-    let release!: () => void;
-    const gate = new Promise<void>((r) => { release = r; });
-    let aborted!: () => void;
-    const sawAbort = new Promise<void>((r) => { aborted = r; });
-    const slow: ModelBackend = {
-      async streamChat(args: StreamChatArgs) {
-        await args.onEvent?.({ type: 'text', text: '先到的字' });
-        args.signal?.addEventListener('abort', () => aborted(), { once: true });
-        await gate;
-        return args.signal?.aborted ? { ok: false, kind: 'aborted' } : CLEAN;
-      },
-    };
-    run.host.env.DESK_BACKEND = slow;
-    const controller = new AbortController();
-    const res = await fetch(`${run.base}/${TOKEN}/api/oc/desk/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ window_id: windowId, message: 'x' }), signal: controller.signal });
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let seen = '';
-    while (!seen.includes('先到的字')) {
-      const { value, done } = await reader.read();
-      assert.equal(done, false, '模型没写完之前流不该结束');
-      seen += decoder.decode(value, { stream: true });
-    }
-    controller.abort();
-    await Promise.race([sawAbort, new Promise((_, rej) => setTimeout(() => rej(new Error('断开后 5 秒还没传到模型那头')), 5000))]);
-    release();
+    run.host.env.DESK_BACKEND = model.backend;
+    const turn = await startTurn(run.base, windowId);
+    assert.equal(await running(run.base, windowId), true);
+    turn.controller.abort();
+    // 等宿主那头看到连接断了(res close),再放模型收尾
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(model.state.sawAbort, false, '手机断开不该叫模型停');
+    assert.equal(await running(run.base, windowId), true, '断开以后电脑那边还在写');
+    model.release();
     await run.host.pending.settle();
-    // 被中止的这一楼不入账:只有用户楼,没有模型楼
+    assert.equal(await running(run.base, windowId), false);
+    const win = await api(run.base, `/desk/windows/${windowId}`);
+    assert.deepEqual(win.floors.map((f: any) => f.role), ['user', 'assistant']);
+    assert.equal(win.floors[1].content, '一二');
+  } finally { model.release(); await run.stop(); }
+});
+
+test('宿主:暂停走「停」的口子,模型收到 abort,这一楼不落库', async () => {
+  const run = await start();
+  const model = gatedModel();
+  try {
+    const windowId = await makeWindow(run.base);
+    run.host.env.DESK_BACKEND = model.backend;
+    const turn = await startTurn(run.base, windowId);
+    const stop = await api(run.base, '/desk/stop', { window_id: windowId });
+    assert.deepEqual(stop, { success: true, stopped: true });
+    await until(() => model.state.sawAbort, '模型收到 abort');
+    turn.controller.abort();
+    await run.host.pending.settle();
+    assert.equal(await running(run.base, windowId), false);
     const win = await api(run.base, `/desk/windows/${windowId}`);
     assert.deepEqual(win.floors.map((f: any) => f.role), ['user']);
-  } finally { await run.stop(); }
+    // 没在写的窗口:停了个寂寞,照实说没停到
+    assert.deepEqual(await api(run.base, '/desk/stop', { window_id: windowId }), { success: true, stopped: false });
+  } finally { model.release(); await run.stop(); }
+});
+
+test('宿主:一扇窗一次只写一楼——上一楼还在写,新发送和重 roll 都 409,不落孤儿楼', async () => {
+  const run = await start();
+  const model = gatedModel();
+  try {
+    const windowId = await makeWindow(run.base);
+    run.host.env.DESK_BACKEND = model.backend;
+    const turn = await startTurn(run.base, windowId);
+    turn.controller.abort();
+    for (const body of [{ window_id: windowId, message: '第二句' }, { window_id: windowId, roll: true }]) {
+      const res = await fetch(`${run.base}/${TOKEN}/api/oc/desk/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      assert.equal(res.status, 409);
+      assert.match((await res.json()).error, /上一楼还在写/);
+    }
+    assert.equal(model.state.calls, 1);
+    model.release();
+    await run.host.pending.settle();
+    const win = await api(run.base, `/desk/windows/${windowId}`);
+    assert.deepEqual(win.floors.map((f: any) => f.role), ['user', 'assistant']);
+    // 写完放了登记,下一楼照常
+    run.host.env.DESK_BACKEND = { async streamChat() { return CLEAN; } };
+    const again = await fetch(`${run.base}/${TOKEN}/api/oc/desk/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ window_id: windowId, message: '第三句' }) });
+    assert.equal(again.status, 200);
+    await again.text();
+    await run.host.pending.settle();
+    assert.equal((await api(run.base, `/desk/windows/${windowId}`)).floors.length, 4);
+  } finally { model.release(); await run.stop(); }
 });
 
 test('宿主:defaultModel 只在聊天口没带 model 时补上', async () => {

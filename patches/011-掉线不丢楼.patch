@@ -1,0 +1,502 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 19:02:59 +0000
+Subject: [PATCH] desk:
+ 手机掉线不停写,写完照常落库;暂停走「停」,一扇窗一次只写一楼
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:她在手机上一直撞「连接断了:network error」——那是字已经在往手机上流、连接被半路掐断
+(安卓切后台/锁屏/换网),原来宿主一看到连接断就叫模型停、这一楼不落库,输入的钱照付、字全丢。
+- 新增 src/chat/deskTurns.ts:进程内一张「哪扇窗正在写」的表。占位同步完成,并发两个请求只有
+  一个拿得到;收尾只放自己那份;占了二十分钟没放的当卡死,新的一楼顶掉它并 abort 旧的。
+- chat/desk.ts:handleDeskChat 外包一层登记,拿不到就 409「上一楼还在写」;泵起跑前任何提前
+  返回都放掉登记。手机断开(clientGone)只是不再往手机上写,模型照写、照常落库、照常补状态板;
+  只有「停」abort 模型。往手机写不再 await(原来每帧等手机收下,手机在后台冻住时模型也被拖住);
+  收尾的 writer.close() 也不等。先放登记再发 done,手机收到 done 马上发下一楼不会撞 409。
+  每 15 秒一行 SSE 注释心跳,状态板补算那半分钟不至于一个字都不发。
+- examples/cloudflare/index.ts:POST /desk/stop {window_id} → {stopped};
+  GET /desk/running?window_id= → {running}。
+- frontend TypingDesk.tsx:streamChat 把失败分成没连上 / 半路断 / 409。半路断不贴错误横幅,
+  输入框上方写「电脑那边还在写这一楼,写完会自己出现」,每 3 秒问一声还在不在写、切回前台立刻问,
+  不写了就重载窗口;写成了把还给输入框的那句收回去(用户楼其实存上了、只是确认没传回来),
+  没写成贴一句明白话。进窗也问一声(划掉 app 再打开、那一楼还没写完)。暂停键先发「停」再断流,
+  「停」没送到照样盯着接回来。电脑那边在写的时候发送/重 roll 拦下。
+---
+ examples/cloudflare/index.ts      |  15 +++
+ frontend/app/study/TypingDesk.tsx | 146 +++++++++++++++++++++++++++---
+ src/chat/desk.ts                  |  58 +++++++++---
+ src/chat/deskTurns.ts             |  52 +++++++++++
+ 4 files changed, 249 insertions(+), 22 deletions(-)
+ create mode 100644 upstream/src/chat/deskTurns.ts
+
+diff --git a/examples/cloudflare/index.ts b/examples/cloudflare/index.ts
+index d7ac8fb..6f7c4fa 100644
+--- a/examples/cloudflare/index.ts
++++ b/examples/cloudflare/index.ts
+@@ -33,6 +33,7 @@ import { deskDryrun } from '../../src/chat/deskAssemble';
+ import { maybeFoldDeskTimeline } from '../../src/chat/deskTimeline';
+ import { deskBoardRefresh } from '../../src/chat/deskBoardRefresh';
+ import { handleDeskChat, type DeskChatStorage } from '../../src/chat/desk';
++import { isDeskTurnRunning, stopDeskTurn } from '../../src/chat/deskTurns';
+ 
+ interface Env extends AuthEnv {
+   OC_DB: D1Database;
+@@ -689,6 +690,20 @@ async function handleDeskAdmin(request: Request, env: Env, url: URL, ctx: Execut
+     return handleDeskChat(env as any, read.body, storage, request.signal, (promise) => ctx.waitUntil(promise));
+   }
+ 
++  // 手机掉线不停写(见 chat/deskTurns.ts):暂停键走「停」,手机回来问「还在写吗」,不在写了就重新载入窗口。
++  if (url.pathname === '/api/oc/desk/stop' && request.method === 'POST') {
++    const read = await deskReadJsonLimited(request);
++    if ('resp' in read) return read.resp;
++    const windowId = typeof read.body?.window_id === 'string' ? read.body.window_id.trim() : '';
++    if (!windowId) return json(request, env, { success: false, error: 'window_id 必填' }, 400);
++    return json(request, env, { success: true, stopped: stopDeskTurn(windowId) });
++  }
++  if (url.pathname === '/api/oc/desk/running' && request.method === 'GET') {
++    const windowId = (url.searchParams.get('window_id') || '').trim();
++    if (!windowId) return json(request, env, { success: false, error: 'window_id 必填' }, 400);
++    return json(request, env, { success: true, running: isDeskTurnRunning(windowId) });
++  }
++
+   return null;
+ }
+ 
+diff --git a/frontend/app/study/TypingDesk.tsx b/frontend/app/study/TypingDesk.tsx
+index f26dfaf..42487af 100644
+--- a/frontend/app/study/TypingDesk.tsx
++++ b/frontend/app/study/TypingDesk.tsx
+@@ -1165,6 +1165,110 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+   }
+   useEffect(() => () => { if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current); }, []);
+ 
++  // ── 掉线不丢楼:手机断了电脑照写(后端 chat/deskTurns.ts),只有暂停键才停。断了以后每 3 秒问一声
++  // 「这扇窗还在写吗」,切回前台立刻问;不写了就重新载入窗口,那一楼就在了。进窗也问一声:划掉 app
++  // 再打开、电脑那边还没写完的时候,一样等着接。
++  // expect:断线那一刻手上知道的事,收尾时拿它判断这一楼到底写没写成,写成了把还给输入框的字收回去。
++  type RemoteExpect = { kind: 'send'; msg: string; lastAssistantId: string | null } | { kind: 'roll'; floorId: string; variants: number };
++  const [remoteWriting, setRemoteWriting] = useState(false);
++  const remoteWritingRef = useRef(false);
++  const remoteWatchSeqRef = useRef(0);
++  const remoteWatchRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; tick: () => void } | null>(null);
++  // 盯着的时候贴过的横幅(409 那句),接回来以后撤掉;别的横幅不碰
++  const remoteBannerRef = useRef('');
++  function setRemoteWritingBoth(v: boolean) { remoteWritingRef.current = v; setRemoteWriting(v); }
++  function stopRemoteWatch() {
++    const w = remoteWatchRef.current;
++    if (w?.timer) clearTimeout(w.timer);
++    remoteWatchRef.current = null;
++    remoteWatchSeqRef.current++;
++    setRemoteWritingBoth(false);
++  }
++  function watchRemoteTurn(myGen: number, windowId: string, opts: { firstDelay?: number; expect?: RemoteExpect; banner?: string } = {}) {
++    stopRemoteWatch();
++    const tok = remoteWatchSeqRef.current;
++    const startedAt = Date.now();
++    let sawRunning = false;
++    remoteBannerRef.current = opts.banner || '';
++    const alive = () => remoteWatchSeqRef.current === tok && genRef.current === myGen;
++    const w: { timer: ReturnType<typeof setTimeout> | null; tick: () => void } = { timer: null, tick: () => {} };
++    const finish = async () => {
++      remoteWatchRef.current = null;
++      setRemoteWritingBoth(false);
++      let landed: boolean | null = null;
++      try {
++        const res = await fetch(`${base}/api/oc/desk/windows/${windowId}`, { cache: 'no-store' });
++        const d = await res.json().catch(() => null);
++        const fl: Array<{ id: string; role: string; content?: string; variants_count?: number }> = d && d.success === true && Array.isArray(d.floors) ? d.floors : [];
++        if (!alive() || !fl.length) throw new Error('skip');
++        const exp = opts.expect;
++        if (exp?.kind === 'send') {
++          const last = fl[fl.length - 1];
++          landed = last.role === 'assistant' && last.id !== exp.lastAssistantId;
++          // 用户楼其实存上了、只是确认没传回来:还给输入框的那句收回去,免得重发一遍
++          const lastUser = [...fl].reverse().find((f) => f.role === 'user');
++          if (lastUser && String(lastUser.content || '').trim() === exp.msg && inputRef.current.trim() === exp.msg) {
++            setInput('');
++            try { localStorage.setItem(`oc_desk_draft_${windowId}`, ''); } catch {}
++          }
++        } else if (exp?.kind === 'roll') {
++          const f = fl.find((x) => x.id === exp.floorId);
++          landed = !!f && typeof f.variants_count === 'number' && f.variants_count > exp.variants;
++        }
++      } catch { /* 读不到就只重载,不下结论 */ }
++      if (!alive()) return;
++      const banner = remoteBannerRef.current;
++      remoteBannerRef.current = '';
++      if (landed === false) setDeskError('电脑那边这一楼没写成(模型出错或被停了),这轮没存档;可以重发或重 roll');
++      else if (banner) setDeskError((cur) => (cur === banner ? '' : cur));
++      loadWindow(windowId, true, myGen).catch(() => {});
++    };
++    const tick = async () => {
++      w.timer = null;
++      if (!alive()) return;
++      let running = true; // 问不到(网还没回来)就当还在写,接着等
++      try {
++        const res = await fetch(`${base}/api/oc/desk/running?window_id=${encodeURIComponent(windowId)}`, { cache: 'no-store' });
++        const d = await res.json().catch(() => null);
++        if (res.ok && d && d.success === true) running = d.running === true;
++        else if (res.status === 404) running = false; // 宿主还是旧版、没有这个口子:不等了
++      } catch { /* 接着等 */ }
++      if (!alive()) return;
++      // 一楼最长也就十来分钟;问了二十分钟还说在写,不陪它耗了
++      if (running && Date.now() - startedAt < 20 * 60_000) {
++        sawRunning = true;
++        setRemoteWritingBoth(true);
++        w.timer = setTimeout(w.tick, 3000);
++        return;
++      }
++      // 只是进窗/暂停后顺手问一声、电脑那边本来就没在写:什么都不用做
++      if (!opts.expect && !opts.banner && !sawRunning) { remoteWatchRef.current = null; return; }
++      await finish();
++    };
++    w.tick = () => { void tick(); };
++    remoteWatchRef.current = w;
++    w.timer = setTimeout(w.tick, opts.firstDelay ?? 0);
++  }
++  // 切回前台:正在等的话立刻问一声,不等那 3 秒
++  useEffect(() => {
++    const onVisible = () => {
++      if (document.visibilityState !== 'visible') return;
++      const w = remoteWatchRef.current;
++      if (w && w.timer) { clearTimeout(w.timer); w.timer = null; w.tick(); }
++    };
++    document.addEventListener('visibilitychange', onVisible);
++    return () => { document.removeEventListener('visibilitychange', onVisible); stopRemoteWatch(); };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++  // 暂停:先叫电脑那边停(那一楼不落库),再断自己的流。「停」没送到也没关系,下面的收尾会盯着接回来。
++  function pauseTurn() {
++    const windowId = curWindowIdRef.current;
++    if (windowId && envOk) {
++      fetch(`${base}/api/oc/desk/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ window_id: windowId }) }).catch(() => {});
++    }
++    abortRef.current?.abort();
++  }
++
+   // ── 下行正则规则表——窗口(win)首次装载完整后拉一次,downRulesFetchedForRef 挡住同一扇窗
+   // 后续 gentle reload 触发的重复请求(win 对象引用每次 reload 都换,但 id 不变——挡的是 id,不是引用)。
+   // 两口请求:①配方列表(项目维度,现有后端没有"单个配方"端点,借列表反查 preset_id) ②正则全表
+@@ -1259,6 +1363,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+     setBeautifyOverrides(loadBeautifyOverrides(id));
+     setMode('write');
+     loadWindow(id, false, genRef.current);
++    watchRemoteTurn(genRef.current, id); // 划掉 app 再进来、电脑那边还没写完:接着等
+     try { const d = localStorage.getItem(`oc_desk_draft_${id}`); setInput(d || ''); } catch { setInput(''); }
+   }
+   async function backToList() {
+@@ -1291,6 +1396,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+     setTurnKind(null);
+     setDeskError('');
+     if (resyncTimerRef.current) { clearTimeout(resyncTimerRef.current); resyncTimerRef.current = null; }
++    stopRemoteWatch();
+     // 回列表也是世界翻篇,dryrun 在飞的话同样要杀令牌+复位,
+     // 不然下次进任何窗透视都被卡死的 dryrunLoading 拦住。
+     dryrunSeqRef.current++;
+@@ -1566,7 +1672,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+   // ── SSE 消费(同编辑部 callChat 的 data: 行解析,desk 没有工具事件,usage/ping 不用管) ──
+   // FIX1:不再"读完循环就当成功"——显式收口成 outcome,done 事件才算体面终态,
+   // error 事件/没等到 done 就 EOF/fetch或读流本身炸了(含 abort),一律算 error,绝不裸 resolve "ok"。
+-  type StreamOutcome = { done: true; floorId?: string } | { error: string; aborted?: boolean };
++  // disconnected:'before'=压根没连上(fetch 本身炸了),'during'=字已经在路上、连接半路断了(安卓切后台、
++  // 锁屏、换网都是这种)。busy=宿主说这扇窗上一楼还在写(409)。后两种电脑那边可能还在写,要盯着接回来。
++  type StreamOutcome = { done: true; floorId?: string } | { error: string; aborted?: boolean; disconnected?: 'before' | 'during'; busy?: boolean };
+   async function streamChat(body: any, handlers: {
+     onUserSaved?: (id: string) => void;
+     onText?: (t: string) => void;
+@@ -1580,7 +1688,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+       });
+     } catch (err: any) {
+       if (err?.name === 'AbortError') return { error: '已暂停', aborted: true };
+-      return { error: `连接断了：${err?.message || err}` };
++      return { error: `连接断了：${err?.message || err}`, disconnected: 'before' };
+     }
+     // 无声守卫排查(实测撞到的洞:删配方没查窗口引用,窗口还钉着旧recipe_id,重roll时后端
+     // assembleDesk 装配失败返回 HTTP 500 + {success:false, error:'配方不存在: ...'}这样的JSON体——
+@@ -1593,7 +1701,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+         const eb = await res.json();
+         if (eb && typeof eb.error === 'string' && eb.error) msg = eb.error;
+       } catch { /* 非JSON错误体(网关级故障等),退回HTTP状态码文案 */ }
+-      return { error: msg };
++      return res.status === 409 ? { error: msg, busy: true } : { error: msg };
+     }
+     if (!res.body) return { error: '响应没有内容(服务端异常)' };
+     const reader = res.body.getReader();
+@@ -1624,11 +1732,11 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+       }
+     } catch (err: any) {
+       if (err?.name === 'AbortError') return { error: '已暂停', aborted: true };
+-      return { error: `连接断了：${err?.message || err}` };
++      return { error: `连接断了：${err?.message || err}`, disconnected: 'during' };
+     }
+     // 读到 EOF 但压根没收到 done/error——流断在半道,同样不算体面收尾(desk.ts writer.close() 前
+     // 一定会先发 done 或 error,读到这里说明连接被腰斩,不是服务端的正常收尾)
+-    return { error: '流断在半道,没收到结束信号' };
++    return { error: '流断在半道,没收到结束信号', disconnected: 'during' };
+   }
+ 
+   // ── ①普通发送 ──
+@@ -1657,8 +1765,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+     // 互斥只有单向:换配方PUT在飞时同理不许起新生成——正在换的这个recipe_id
+     // 可能这楼装配就要用上,读ref理由同上面boardSavingRef那行。
+     if (recipeSwitchingRef.current) { setDeskError('配方切换中,稍等一两秒再试'); return; }
++    if (remoteWritingRef.current) { setDeskError('上一楼电脑那边还在写,写完会自己出现'); return; }
+     if (composerRef.current) composerRef.current.style.height = 'auto';
+     const windowId = curWindowId;
++    const lastAssistantId = [...floorsRef.current].reverse().find((x) => x.role === 'assistant')?.id ?? null;
+     const myGen = genRef.current;
+     sendingRef.current = true;
+     pinnedRef.current = true; // 自己发消息=想看新楼,强制重钉(钉底机制见 pinnedRef 声明处)
+@@ -1727,10 +1837,16 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+           // 不需要 composerUntouched 那套兜底,原样保留原逻辑。
+           setFloors((prev) => prev.filter((x) => x.key !== asgKey));
+         }
+-        if (!outcome.aborted && myGen === genRef.current) setDeskError(bannerMsg); // 主动暂停不算"出错",不吓到人
++        // 半路断线:电脑那边接着写,不贴吓人的错误横幅,输入框上方那行字说明情况、盯着接回来。
++        // 例外是那条"原文帖在横幅里"的兜底——那时这句话只在横幅里,不能不贴。
++        const remote = outcome.disconnected === 'during';
++        if (!outcome.aborted && (!remote || bannerMsg !== outcome.error) && myGen === genRef.current) setDeskError(bannerMsg); // 主动暂停不算"出错",不吓到人
+         if (myGen === genRef.current) {
+           loadWindow(windowId, true, myGen).catch(() => {});
+-          if (!outcome.aborted) scheduleResync(myGen, windowId, 2500); // 真出错兜个延迟对账(ctx.waitUntil 可能还在跑)
++          if (remote) watchRemoteTurn(myGen, windowId, { expect: { kind: 'send', msg, lastAssistantId } });
++          else if (outcome.busy || outcome.disconnected === 'before') watchRemoteTurn(myGen, windowId, { banner: outcome.busy ? bannerMsg : undefined });
++          else if (outcome.aborted) watchRemoteTurn(myGen, windowId, { firstDelay: 1500 }); // 「停」万一没送到,电脑那边还在写,照样接回来
++          else scheduleResync(myGen, windowId, 2500); // 真出错兜个延迟对账(ctx.waitUntil 可能还在跑)
+         }
+       }
+ 
+@@ -1766,6 +1882,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+     if (boardSavingRef.current) { setDeskError('状态板保存中,稍等一两秒再试'); return; } // 同 send() 那道闸,读ref理由见那边注释
+     if (timelineSavingRef.current) { setDeskError('时光带保存中,稍等一两秒再试'); return; }
+     if (recipeSwitchingRef.current) { setDeskError('配方切换中,稍等一两秒再试'); return; } // 同上
++    if (remoteWritingRef.current) { setDeskError('上一楼电脑那边还在写,写完会自己出现'); return; }
+     const windowId = curWindowId;
+     const myGen = genRef.current;
+     sendingRef.current = true;
+@@ -1800,10 +1917,14 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+         } else {
+           patchFloor(myGen, f.key, (fl) => ({ ...fl, streaming: false })); // 快照丢了(理论不该发生)的防御性兜底,至少别卡在流式态
+         }
+-        if (!outcome.aborted && myGen === genRef.current) setDeskError(outcome.error);
++        const remote = outcome.disconnected === 'during';
++        if (!outcome.aborted && !remote && myGen === genRef.current) setDeskError(outcome.error);
+         if (myGen === genRef.current) {
+           loadWindow(windowId, true, myGen).catch(() => {});
+-          if (!outcome.aborted) scheduleResync(myGen, windowId, 2500);
++          if (remote && f.id) watchRemoteTurn(myGen, windowId, { expect: { kind: 'roll', floorId: f.id, variants: f.variantsCount } });
++          else if (outcome.busy || outcome.disconnected === 'before') watchRemoteTurn(myGen, windowId, { banner: outcome.busy ? outcome.error : undefined });
++          else if (outcome.aborted) watchRemoteTurn(myGen, windowId, { firstDelay: 1500 });
++          else scheduleResync(myGen, windowId, 2500);
+         }
+       }
+       floorSnapshotRef.current = null;
+@@ -4092,6 +4213,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+           {sending && streamStatus && (
+             <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">{streamStatus}</div>
+           )}
++          {!sending && remoteWriting && (
++            <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">电脑那边还在写这一楼,写完会自己出现</div>
++          )}
+           {/* 手机上折成两行:上一行 透视/纸条 两颗小钮,下一行 输入框铺满 + 发送;那颗空 span 是换行用的 */}
+           <div className="max-w-2xl mx-auto flex items-end gap-2.5 flex-wrap max-[700px]:gap-2">
+             <button
+@@ -4164,11 +4288,11 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+               />
+             </div>
+             {sending && turnKind !== null ? (
+-              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
++              <button onClick={pauseTurn} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+                 ■ 暂停
+               </button>
+             ) : (
+-              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
++              <button onClick={() => send()} disabled={!input.trim() || sending || remoteWriting || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-[46px] max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+                 发送
+               </button>
+             )}
+diff --git a/src/chat/desk.ts b/src/chat/desk.ts
+index 8690bcf..cd902ac 100644
+--- a/src/chat/desk.ts
++++ b/src/chat/desk.ts
+@@ -26,6 +26,7 @@ import type { ModelBackend } from '../core/modelBackend.ts';
+ import { validateDeskChannelConfig } from '../core/deskChannelConfig.ts';
+ import { DEFAULT_THINKING_TAGS } from '../tools/deskThinkingTags.ts';
+ import { isDeskAsideMessage, isDeskAsideFloor } from '../core/deskAside.ts';
++import { claimDeskTurn, type DeskTurn } from './deskTurns.ts';
+ 
+ interface DeskChatEnv {
+   OC_DB: D1Database;
+@@ -134,12 +135,34 @@ export function unwrapContentTag(text: string): string {
+ }
+ 
+ // ===== handleDeskChat =====
++// 外面这层只管「一扇窗一次只写一楼」的登记(见 deskTurns.ts):拿不到登记就 409;拿到了,模型泵起跑
++// 就把登记交给泵,泵收尾时放;泵起跑之前任何一处提前返回,这里放掉。
+ export async function handleDeskChat(
+   env: DeskChatEnv,
+   params: DeskChatParams,
+   storage: DeskChatStorage,
+   signal?: AbortSignal,
+   waitUntil?: (promise: Promise<unknown>) => void
++): Promise<Response> {
++  const claimWindowId = params && typeof params === 'object' && typeof params.window_id === 'string' ? params.window_id.trim() : '';
++  if (!claimWindowId) return runDeskChat(env, params, storage, signal, waitUntil, null);
++  const turn = claimDeskTurn(claimWindowId);
++  if (!turn) return errJson('这扇窗上一楼还在写(手机掉过线也照写),写完会自己出现;要停就按暂停', 409);
++  const handoff = { started: false };
++  try {
++    return await runDeskChat(env, params, storage, signal, waitUntil, { turn, handoff });
++  } finally {
++    if (!handoff.started) turn.release();
++  }
++}
++
++async function runDeskChat(
++  env: DeskChatEnv,
++  params: DeskChatParams,
++  storage: DeskChatStorage,
++  signal: AbortSignal | undefined,
++  waitUntil: ((promise: Promise<unknown>) => void) | undefined,
++  claim: { turn: DeskTurn; handoff: { started: boolean } } | null,
+ ): Promise<Response> {
+   // deskReadJsonLimited(index.ts)只挡"不是合法JSON"和"超10MB",合法JSON的 null/数组/字符串
+   // 照样会被当成 body 传进来——这里补一道形状闸,同 tools/desk.ts 系列 handler 的开头习惯。
+@@ -296,11 +319,13 @@ export async function handleDeskChat(
+   const encoder = new TextEncoder();
+   let clientGone = false;
+ 
+-  const send = async (obj: any) => {
++  // 往手机上写不等手机收下:帧排进流里就走,模型照读照写。原来每帧 await,手机在后台被冻住、连接还没断时,
++  // 模型这头也被拖住。一楼的字量有限,排着的帧不会多到哪儿去。手机断了(写失败)就不再写,模型不停。
++  const write = (chunk: string) => {
+     if (clientGone) return;
+-    try { await writer.write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); }
+-    catch { clientGone = true; }
++    writer.write(encoder.encode(chunk)).catch(() => { clientGone = true; });
+   };
++  const send = async (obj: any) => { write(`data: ${JSON.stringify(obj)}\n\n`); };
+ 
+   if (signal) {
+     if (signal.aborted) clientGone = true;
+@@ -414,24 +439,26 @@ export async function handleDeskChat(
+ 
+   // ===== 模型泵:直连 Anthropic,单条 user 消息(content=tail),零工具——不像
+   // editorial.ts 的 pump 那样要跑 MAX_TURNS 工具回合循环,一次请求打到底,一次流读到底。=====
++  // 心跳:SSE 注释行,前端只认 data: 开头的行,这行直接跳过。状态板补算那半分钟一个字不发,
++  // 路上哪一段嫌连接太安静都喂得住。泵一起跑就开始跳,收尾时停。
++  let heartbeat: ReturnType<typeof setInterval> | null = null;
+   const pumpBackend = async () => {
+     if (mode === 'normal') await send({ type: 'user_saved', id: userFloorId });
+-    const controller = new AbortController();
+-    const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
+-    if (signal?.aborted) controller.abort();
++    // 手机断开不再叫模型停(见 deskTurns.ts 头注释);只有「停」请求 abort 这个 controller。
++    const controller = claim ? claim.turn.controller : new AbortController();
+     const backend = env.DESK_BACKEND ?? new AnthropicStreamBackend({ apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, userId: USER_ID });
+     let failed = false;
+     const result = await backend.streamChat({ system: systemBlocks, prompt: tail, model, signal: controller.signal, thinkingTags, onEvent: async (event) => {
+-      if (clientGone) { controller.abort(); return; }
++      if (clientGone) return;
+       if (event.type === 'text') await send({ type: 'text', text: event.text });
+       else if (event.type === 'thinking') await send({ type: 'thinking', text: event.text });
+       else if (event.type === 'ping') await send({ type: 'ping' });
+       else if (event.type === 'usage') await send({ type: 'usage', input: event.usage.input || 0, cache_read: event.usage.cacheRead || 0, cache_write: event.usage.cacheWrite || 0 });
+     } });
+-    signal?.removeEventListener('abort', abort);
+     const usage = result.usage || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+     if (!result.ok) {
+       failed = result.kind !== 'aborted';
++      claim?.turn.release();
+       if (!clientGone && result.kind !== 'aborted') {
+         const error = result.kind === 'refusal'
+           ? '这条被上游安全闸拦了(refusal),换个模型再试;这轮没存档'
+@@ -441,16 +468,25 @@ export async function handleDeskChat(
+     } else {
+       try {
+         const saved = await finalizeDeskTurn(result.text, result.thinking, { input: usage.input || 0, output: usage.output || 0, cache_read: usage.cacheRead || 0, cache_write: usage.cacheWrite || 0 });
++        // 先放登记再发 done:手机收到 done 马上发下一楼,不能撞上自己这一楼的 409
++        claim?.turn.release();
+         if ('conflict' in saved) { failed = true; await send({ type: 'error', error: '这一楼在生成期间被改动过,本次结果已丢弃,请重试' }); }
+         else await send({ type: 'done', id: saved.floorId });
+-      } catch (error: any) { failed = true; await send({ type: 'error', error: `存档失败: ${error.message}` }); }
++      } catch (error: any) { failed = true; claim?.turn.release(); await send({ type: 'error', error: `存档失败: ${error.message}` }); }
+     }
+     try { const log = () => usageSink.logUsage('desk', model, { input: usage.input, output: usage.output, cache_read: usage.cacheRead, cache_write: usage.cacheWrite }, failed ? 'failed' : 'ok'); if (waitUntil) waitUntil(log()); else await log(); } catch (error) { console.error('[desk] 记账失败(不拖垮存档)', error); }
+-    try { await writer.close(); } catch {}
++    clearInterval(heartbeat);
++    // 不等手机把排着的帧收完:手机冻在后台时 close 会一直挂着,时光带折叠不该陪它等
++    writer.close().catch(() => {});
+     if (waitUntil) waitUntil(maybeFoldDeskTimeline(env as any, windowId)); else maybeFoldDeskTimeline(env as any, windowId);
+   };
+ 
+-  const chosen = pumpBackend;
++  const chosen = async () => {
++    heartbeat = setInterval(() => write(': ping\n\n'), 15_000);
++    try { await pumpBackend(); }
++    finally { clearInterval(heartbeat); claim?.turn.release(); }
++  };
++  if (claim) claim.handoff.started = true;
+   if (waitUntil) waitUntil(chosen());
+   else chosen();
+ 
+diff --git a/src/chat/deskTurns.ts b/src/chat/deskTurns.ts
+new file mode 100644
+index 0000000..ba19d70
+--- /dev/null
++++ b/src/chat/deskTurns.ts
+@@ -0,0 +1,52 @@
++// 正在写的楼:一扇窗一次只写一楼,手机掉线不算停,只有「停」请求才停。
++//
++// 为什么:手机切后台、锁屏、换网,连接会被半路掐断。原来 chat/desk.ts 一看到连接断就叫模型停、
++// 这一楼不落库——输入的钱照付,字全丢。现在连接断了只是不再往手机上写,模型照写、照常落库;
++// 手机回来问一声「这扇窗还在写吗」,写完了重新载入窗口就能看到。要停就走 POST /desk/stop。
++//
++// 表放进程内存:自托管宿主是单进程,够用。部署成多个 isolate 时这张表各管各的,「停」和「还在写吗」
++// 只对落在同一个 isolate 上的请求灵,一扇窗一楼的闸也只在 isolate 内有效。
++//
++// 一楼最长也就模型超时(8 分钟)加状态板补算;登记超过 STALE_MS 还没放的当它卡死了,让新的一楼顶掉它
++// (顺手 abort 旧的),免得一扇窗被锁到宿主重启。
++
++export interface DeskTurn {
++  readonly windowId: string;
++  readonly controller: AbortController;
++  readonly startedAt: number;
++  release(): void;
++}
++
++const STALE_MS = 20 * 60_000;
++const running = new Map<string, DeskTurn>();
++
++// 拿到登记就返回它;这扇窗已经有一楼在写就返回 null。同步完成,两个并发请求不会都拿到。
++export function claimDeskTurn(windowId: string, now = Date.now()): DeskTurn | null {
++  const existing = running.get(windowId);
++  if (existing) {
++    if (now - existing.startedAt < STALE_MS) return null;
++    existing.controller.abort();
++    running.delete(windowId);
++  }
++  const turn: DeskTurn = {
++    windowId,
++    controller: new AbortController(),
++    startedAt: now,
++    // 只放自己那一份:被顶掉的旧登记收尾时不能把新登记删了
++    release() { if (running.get(windowId) === turn) running.delete(windowId); },
++  };
++  running.set(windowId, turn);
++  return turn;
++}
++
++export function isDeskTurnRunning(windowId: string): boolean {
++  return running.has(windowId);
++}
++
++// 叫正在写的那一楼停下;那一楼不落库。登记要等它真的收尾才放,所以停完马上问「还在写吗」可能还是 true。
++export function stopDeskTurn(windowId: string): boolean {
++  const turn = running.get(windowId);
++  if (!turn) return false;
++  turn.controller.abort();
++  return true;
++}

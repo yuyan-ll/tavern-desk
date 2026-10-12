@@ -26,6 +26,7 @@ import type { ModelBackend } from '../core/modelBackend.ts';
 import { validateDeskChannelConfig } from '../core/deskChannelConfig.ts';
 import { DEFAULT_THINKING_TAGS } from '../tools/deskThinkingTags.ts';
 import { isDeskAsideMessage, isDeskAsideFloor } from '../core/deskAside.ts';
+import { claimDeskTurn, type DeskTurn } from './deskTurns.ts';
 
 interface DeskChatEnv {
   OC_DB: D1Database;
@@ -134,12 +135,34 @@ export function unwrapContentTag(text: string): string {
 }
 
 // ===== handleDeskChat =====
+// 外面这层只管「一扇窗一次只写一楼」的登记(见 deskTurns.ts):拿不到登记就 409;拿到了,模型泵起跑
+// 就把登记交给泵,泵收尾时放;泵起跑之前任何一处提前返回,这里放掉。
 export async function handleDeskChat(
   env: DeskChatEnv,
   params: DeskChatParams,
   storage: DeskChatStorage,
   signal?: AbortSignal,
   waitUntil?: (promise: Promise<unknown>) => void
+): Promise<Response> {
+  const claimWindowId = params && typeof params === 'object' && typeof params.window_id === 'string' ? params.window_id.trim() : '';
+  if (!claimWindowId) return runDeskChat(env, params, storage, signal, waitUntil, null);
+  const turn = claimDeskTurn(claimWindowId);
+  if (!turn) return errJson('这扇窗上一楼还在写(手机掉过线也照写),写完会自己出现;要停就按暂停', 409);
+  const handoff = { started: false };
+  try {
+    return await runDeskChat(env, params, storage, signal, waitUntil, { turn, handoff });
+  } finally {
+    if (!handoff.started) turn.release();
+  }
+}
+
+async function runDeskChat(
+  env: DeskChatEnv,
+  params: DeskChatParams,
+  storage: DeskChatStorage,
+  signal: AbortSignal | undefined,
+  waitUntil: ((promise: Promise<unknown>) => void) | undefined,
+  claim: { turn: DeskTurn; handoff: { started: boolean } } | null,
 ): Promise<Response> {
   // deskReadJsonLimited(index.ts)只挡"不是合法JSON"和"超10MB",合法JSON的 null/数组/字符串
   // 照样会被当成 body 传进来——这里补一道形状闸,同 tools/desk.ts 系列 handler 的开头习惯。
@@ -296,11 +319,13 @@ export async function handleDeskChat(
   const encoder = new TextEncoder();
   let clientGone = false;
 
-  const send = async (obj: any) => {
+  // 往手机上写不等手机收下:帧排进流里就走,模型照读照写。原来每帧 await,手机在后台被冻住、连接还没断时,
+  // 模型这头也被拖住。一楼的字量有限,排着的帧不会多到哪儿去。手机断了(写失败)就不再写,模型不停。
+  const write = (chunk: string) => {
     if (clientGone) return;
-    try { await writer.write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); }
-    catch { clientGone = true; }
+    writer.write(encoder.encode(chunk)).catch(() => { clientGone = true; });
   };
+  const send = async (obj: any) => { write(`data: ${JSON.stringify(obj)}\n\n`); };
 
   if (signal) {
     if (signal.aborted) clientGone = true;
@@ -414,24 +439,26 @@ export async function handleDeskChat(
 
   // ===== 模型泵:直连 Anthropic,单条 user 消息(content=tail),零工具——不像
   // editorial.ts 的 pump 那样要跑 MAX_TURNS 工具回合循环,一次请求打到底,一次流读到底。=====
+  // 心跳:SSE 注释行,前端只认 data: 开头的行,这行直接跳过。状态板补算那半分钟一个字不发,
+  // 路上哪一段嫌连接太安静都喂得住。泵一起跑就开始跳,收尾时停。
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
   const pumpBackend = async () => {
     if (mode === 'normal') await send({ type: 'user_saved', id: userFloorId });
-    const controller = new AbortController();
-    const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
-    if (signal?.aborted) controller.abort();
+    // 手机断开不再叫模型停(见 deskTurns.ts 头注释);只有「停」请求 abort 这个 controller。
+    const controller = claim ? claim.turn.controller : new AbortController();
     const backend = env.DESK_BACKEND ?? new AnthropicStreamBackend({ apiKey: env.ANTHROPIC_API_KEY, baseUrl: env.ANTHROPIC_BASE_URL, userId: USER_ID });
     let failed = false;
     const result = await backend.streamChat({ system: systemBlocks, prompt: tail, model, signal: controller.signal, thinkingTags, onEvent: async (event) => {
-      if (clientGone) { controller.abort(); return; }
+      if (clientGone) return;
       if (event.type === 'text') await send({ type: 'text', text: event.text });
       else if (event.type === 'thinking') await send({ type: 'thinking', text: event.text });
       else if (event.type === 'ping') await send({ type: 'ping' });
       else if (event.type === 'usage') await send({ type: 'usage', input: event.usage.input || 0, cache_read: event.usage.cacheRead || 0, cache_write: event.usage.cacheWrite || 0 });
     } });
-    signal?.removeEventListener('abort', abort);
     const usage = result.usage || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     if (!result.ok) {
       failed = result.kind !== 'aborted';
+      claim?.turn.release();
       if (!clientGone && result.kind !== 'aborted') {
         const error = result.kind === 'refusal'
           ? '这条被上游安全闸拦了(refusal),换个模型再试;这轮没存档'
@@ -441,16 +468,25 @@ export async function handleDeskChat(
     } else {
       try {
         const saved = await finalizeDeskTurn(result.text, result.thinking, { input: usage.input || 0, output: usage.output || 0, cache_read: usage.cacheRead || 0, cache_write: usage.cacheWrite || 0 });
+        // 先放登记再发 done:手机收到 done 马上发下一楼,不能撞上自己这一楼的 409
+        claim?.turn.release();
         if ('conflict' in saved) { failed = true; await send({ type: 'error', error: '这一楼在生成期间被改动过,本次结果已丢弃,请重试' }); }
         else await send({ type: 'done', id: saved.floorId });
-      } catch (error: any) { failed = true; await send({ type: 'error', error: `存档失败: ${error.message}` }); }
+      } catch (error: any) { failed = true; claim?.turn.release(); await send({ type: 'error', error: `存档失败: ${error.message}` }); }
     }
     try { const log = () => usageSink.logUsage('desk', model, { input: usage.input, output: usage.output, cache_read: usage.cacheRead, cache_write: usage.cacheWrite }, failed ? 'failed' : 'ok'); if (waitUntil) waitUntil(log()); else await log(); } catch (error) { console.error('[desk] 记账失败(不拖垮存档)', error); }
-    try { await writer.close(); } catch {}
+    clearInterval(heartbeat);
+    // 不等手机把排着的帧收完:手机冻在后台时 close 会一直挂着,时光带折叠不该陪它等
+    writer.close().catch(() => {});
     if (waitUntil) waitUntil(maybeFoldDeskTimeline(env as any, windowId)); else maybeFoldDeskTimeline(env as any, windowId);
   };
 
-  const chosen = pumpBackend;
+  const chosen = async () => {
+    heartbeat = setInterval(() => write(': ping\n\n'), 15_000);
+    try { await pumpBackend(); }
+    finally { clearInterval(heartbeat); claim?.turn.release(); }
+  };
+  if (claim) claim.handoff.started = true;
   if (waitUntil) waitUntil(chosen());
   else chosen();
 

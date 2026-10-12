@@ -1,7 +1,7 @@
 // node 的 IncomingMessage ⇄ web 的 Request/Response。
 //
 //   · 进:方法、头、body 流原样搬进全局 Request;客户端断开 → Request.signal abort
-//     (上游 handleDeskChat 靠它判断"人走了",停掉模型流)。
+//     (上游 handleDeskChat 靠它判断手机掉线了,不再往手机上写;模型照写、照常落库,停模型只认 /desk/stop)。
 //   · 出:状态、头照抄;body 用 Readable.fromWeb pipe 出去,不攒——SSE 一帧一帧到手机上。
 //   · ctx.waitUntil(p):把 Promise 收进一个集合,进程退出前 await 完(记账、时光带折叠都挂在这上面)。
 
@@ -99,7 +99,7 @@ export async function writeResponse(response: Response, res: ServerResponse, met
   try {
     await pipeline(Readable.fromWeb(response.body as any), res);
   } catch (error: any) {
-    // 客户端中途走了:pipeline 会把 web 流 cancel 掉,上游 SSE 写手随之看到"人走了"。不是故障。
+    // 客户端中途走了:pipeline 会把 web 流 cancel 掉,上游 SSE 写手随之不再写(模型照写,见 chat/deskTurns.ts)。不是故障。
     if (error?.code !== 'ERR_STREAM_PREMATURE_CLOSE' && error?.name !== 'AbortError') {
       console.error('[host] 写回响应失败', error?.message || error);
     }
