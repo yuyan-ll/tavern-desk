@@ -1,0 +1,1159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 15:09:31 +0000
+Subject: [PATCH] frontend: 墙纸、玻璃、正文字体与手机布局
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+为什么:她要整间屋子能换墙纸、要液态玻璃的效果、嫌手机上顶上什么都有、输入框不舒服,
+还有摄像头的洞压在顶栏上。
+- globals.css:四套墙纸(纸绿/墨夜/米纸/乌金)挂在 html[data-theme],报错砖红和强调色上的字色
+  收编成 --warn / --on-accent;玻璃层挂在 html[data-glass="1"],只上在浮着的头栏/输入区/底栏/
+  她的气泡/列表卡片上,写作窗里头尾栏脱离文档流、滚动区按量出来的高度留边。
+- layout.tsx:开机脚本先把存的选择写到 <html> 上,首屏不闪白。
+- study/deskTheme.tsx(新):墙纸面板,存 localStorage['tavern-desk.skin'];跟随系统时白天夜里各绑
+  一套;本机字体从 /fonts/index.json 拉清单,选中的用 @font-face 挂成 desk-reading。
+- study/page.tsx:廊子加「墙纸」;手机上廊子变底栏,写作窗打开时让位;楼层阅读态与刘海让位的样式。
+- study/TypingDesk.tsx:向 page.tsx 报列表/写作态;手机上顶栏只剩返回/窗名/⋯,四颗单字钮进 ⋯ 菜单;
+  输入区折成两行、自动长高五行封顶;楼层加样式钩子,动作条点一下楼层才出;列表屏和写作屏顶上
+  按 --safe-top 让位。
+---
+ frontend/app/globals.css          | 177 +++++++++++++++++++++++++++++
+ frontend/app/layout.tsx           |   5 +
+ frontend/app/study/TypingDesk.tsx | 168 +++++++++++++++++----------
+ frontend/app/study/deskTheme.tsx  | 181 ++++++++++++++++++++++++++++++
+ frontend/app/study/page.tsx       |  83 ++++++++++----
+ 5 files changed, 531 insertions(+), 83 deletions(-)
+ create mode 100644 upstream/frontend/app/study/deskTheme.tsx
+
+diff --git a/frontend/app/globals.css b/frontend/app/globals.css
+index c88d142..d63bf9c 100644
+--- a/frontend/app/globals.css
++++ b/frontend/app/globals.css
+@@ -52,8 +52,118 @@
+   --heatbg-2: #cadcad;
+   --heatbg-3: #9cbf79;
+   --scrim-rgb: 244, 246, 238;
++  /* 语义色补两项:报错/警示用的砖红、强调色上的字色——以前各处写死色号,换墙纸会漏 */
++  --warn: #c2693f;
++  --on-accent: #fffdf5;
++  /* 玻璃层(html[data-glass="1"] 才用):填充、亮边、顶部高光、投影、卡片底、色斑 */
++  --g-fill: rgba(255, 255, 255, 0.42);
++  --g-fill2: rgba(255, 255, 255, 0.58);
++  --g-rim: rgba(255, 255, 255, 0.72);
++  --g-hi: rgba(255, 255, 255, 0.92);
++  --g-shadow: rgba(60, 75, 45, 0.16);
++  --g-card: rgba(255, 255, 255, 0.74);
+ }
+ 
++/* ════════════════════════════════════════════════════════════
++   墙纸:每套就是一组变量值,挂在 html[data-theme]。纸绿(sage)是上面 :root 的默认。
++   选哪套、跟不跟系统,见 study/deskTheme.tsx;layout.tsx 里有一段开机脚本先把存的选择
++   写到 html 上,免得首屏闪一下白。
++   ════════════════════════════════════════════════════════════ */
++html[data-theme="ink"] {
++  /* 墨夜:深青灰底、米白字、同一系的绿做强调 */
++  --scale-0: #26301f;
++  --scale-1: #33432a;
++  --scale-2: #4f6b3a;
++  --scale-3: #6f9e4a;
++  --scale-4: #a3c98a;
++  --page-bg: #1b1f1a;
++  --card-bg: #242a22;
++  --ink-deep: #e6ead9;
++  --ink-body: #c9cfbc;
++  --ink2: #7f8a72;
++  --line-soft: #30372c;
++  --dash-line: #3d4737;
++  --accent: #8fb86b;
++  --card-shadow: rgba(0, 0, 0, 0.35);
++  --card-shadow2: rgba(0, 0, 0, 0.5);
++  --glass-bg: rgba(36, 42, 34, 0.8);
++  --heatbg-0: #222a1f;
++  --heatbg-1: #283322;
++  --heatbg-2: #33432a;
++  --heatbg-3: #4f6b3a;
++  --scrim-rgb: 27, 31, 26;
++  --warn: #d98b6a;
++  --on-accent: #16200f;
++  --g-fill: rgba(255, 255, 255, 0.07);
++  --g-fill2: rgba(255, 255, 255, 0.11);
++  --g-rim: rgba(255, 255, 255, 0.16);
++  --g-hi: rgba(255, 255, 255, 0.22);
++  --g-shadow: rgba(0, 0, 0, 0.45);
++  --g-card: rgba(255, 255, 255, 0.08);
++  color-scheme: dark;
++}
++html[data-theme="rice"] {
++  /* 米纸:暖米底、褐字、琥珀强调 */
++  --scale-0: #f0e8d8;
++  --scale-1: #e2d2b2;
++  --scale-2: #cdb27f;
++  --scale-3: #b0823f;
++  --scale-4: #7a5828;
++  --page-bg: #f7f3ea;
++  --card-bg: #fffdf7;
++  --ink-deep: #4a3f32;
++  --ink-body: #5c5245;
++  --ink2: #a4998a;
++  --line-soft: #ece5d8;
++  --dash-line: #dccfb8;
++  --accent: #b0823f;
++  --card-shadow: rgba(95, 80, 55, 0.10);
++  --card-shadow2: rgba(95, 80, 55, 0.16);
++  --glass-bg: rgba(255, 253, 247, 0.8);
++  --heatbg-0: #efe8da;
++  --heatbg-1: #ebe2d0;
++  --heatbg-2: #e2d2b2;
++  --heatbg-3: #cdb27f;
++  --scrim-rgb: 247, 243, 234;
++  --warn: #b85c3a;
++  --on-accent: #fffaf0;
++  --g-shadow: rgba(95, 80, 55, 0.16);
++}
++html[data-theme="bronze"] {
++  /* 乌金:暖黑底、米字、铜金强调 */
++  --scale-0: #2b2620;
++  --scale-1: #3d3429;
++  --scale-2: #6b5538;
++  --scale-3: #a3783f;
++  --scale-4: #d0a36a;
++  --page-bg: #1e1b18;
++  --card-bg: #272320;
++  --ink-deep: #ece4d6;
++  --ink-body: #cfc5b4;
++  --ink2: #8a7f70;
++  --line-soft: #35302a;
++  --dash-line: #46403a;
++  --accent: #c9955a;
++  --card-shadow: rgba(0, 0, 0, 0.35);
++  --card-shadow2: rgba(0, 0, 0, 0.5);
++  --glass-bg: rgba(39, 35, 32, 0.8);
++  --heatbg-0: #262220;
++  --heatbg-1: #2c2723;
++  --heatbg-2: #3d3429;
++  --heatbg-3: #6b5538;
++  --scrim-rgb: 30, 27, 24;
++  --warn: #e0906a;
++  --on-accent: #1f1710;
++  --g-fill: rgba(255, 255, 255, 0.07);
++  --g-fill2: rgba(255, 255, 255, 0.11);
++  --g-rim: rgba(255, 255, 255, 0.16);
++  --g-hi: rgba(255, 255, 255, 0.22);
++  --g-shadow: rgba(0, 0, 0, 0.45);
++  --g-card: rgba(255, 255, 255, 0.08);
++  color-scheme: dark;
++}
++
++/* 正文阅读字体:墙纸面板选了本机字体时由 deskTheme.tsx 设 --font-reading-user;没设就用后面的回落 */
+ /* ── base ── */
+ html {
+   background: var(--page-bg);
+@@ -81,3 +191,70 @@ body {
+ 
+ /* ── 气泡断词：长英文/URL 允许在任意处折行，不撑破气泡 ── */
+ .wrap-hard { overflow-wrap: break-word; overflow-wrap: anywhere; }
++
++/* ════════════════════════════════════════════════════════════
++   液态玻璃(开关在墙纸面板,开了 html 上挂 data-glass="1")。
++   只上在浮着的那几片东西上:写作窗的头栏和输入区、手机底栏、你的那楼气泡、列表页的卡片、
++   ⋯ 菜单;正文不上,不然滑动掉帧。底色铺几团同系的色斑,玻璃才有东西可折。
++   浮起来的做法:头栏/底栏脱离文档流盖在滚动区上,滚动区按顶槽/底槽量出来的高度留边
++   (--desk-top-h / --desk-bottom-h 由 TypingDesk 量,见那边 ResizeObserver)。
++   ════════════════════════════════════════════════════════════ */
++html[data-glass="1"] .sty-stage-scroll {
++  background:
++    radial-gradient(60% 38% at 12% 6%, color-mix(in srgb, var(--scale-2) 55%, transparent), transparent 72%),
++    radial-gradient(48% 30% at 88% 28%, color-mix(in srgb, var(--scale-1) 85%, transparent), transparent 72%),
++    radial-gradient(70% 45% at 45% 95%, color-mix(in srgb, var(--scale-2) 40%, transparent), transparent 72%),
++    var(--page-bg);
++  background-attachment: fixed;
++}
++html[data-glass="1"] .glass,
++html[data-glass="1"] .desk-header,
++html[data-glass="1"] .chat-inputbar,
++html[data-glass="1"] .desk-menu {
++  background: var(--g-fill) !important;
++  border: 1px solid var(--g-rim) !important;
++  backdrop-filter: blur(24px) saturate(180%);
++  -webkit-backdrop-filter: blur(24px) saturate(180%);
++  box-shadow: 0 10px 30px var(--g-shadow), inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.15) !important;
++}
++html[data-glass="1"] .desk-header { border-radius: 24px !important; }
++html[data-glass="1"] .chat-inputbar { border-radius: 26px !important; }
++html[data-glass="1"] .desk-pill,
++html[data-glass="1"] .desk-header .pill,
++html[data-glass="1"] .chat-inputbar textarea {
++  background: var(--g-fill2) !important;
++  border: 1px solid var(--g-rim) !important;
++  box-shadow: inset 0 1px 0 var(--g-hi) !important;
++}
++html[data-glass="1"] .chat-inputbar .desk-send {
++  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
++}
++html[data-glass="1"] .floor-user {
++  background: color-mix(in srgb, var(--scale-1) 55%, transparent) !important;
++  border: 1px solid var(--g-rim);
++  backdrop-filter: blur(14px) saturate(160%);
++  -webkit-backdrop-filter: blur(14px) saturate(160%);
++  box-shadow: inset 0 1px 0 var(--g-hi), 0 4px 14px var(--g-shadow);
++}
++html[data-glass="1"] .card {
++  background: var(--g-card) !important;
++  border: 1px solid var(--g-rim) !important;
++  backdrop-filter: blur(18px) saturate(170%);
++  -webkit-backdrop-filter: blur(18px) saturate(170%);
++  box-shadow: 0 8px 26px var(--g-shadow), inset 0 1px 0 var(--g-hi) !important;
++}
++/* 写作窗:头栏、底栏浮在滚动区上,滚动区按量出来的高度留边 */
++html[data-glass="1"] .sty-main.desk-writing .sty-stage-top {
++  position: absolute; top: 0; left: 0; right: 0; z-index: 8; pointer-events: none;
++  /* 刘海让位留在玻璃片外面(头栏自己不再加 --safe-top 内边距) */
++  padding: calc(10px + var(--safe-top, env(safe-area-inset-top, 0px))) 10px 0;
++}
++html[data-glass="1"] .sty-main.desk-writing .desk-header { padding-top: 12px !important; }
++html[data-glass="1"] .sty-main.desk-writing .sty-stage-top > * { pointer-events: auto; }
++html[data-glass="1"] .sty-main.desk-writing .sty-stage-bottom {
++  position: absolute; bottom: 0; left: 0; right: 0; z-index: 2; padding: 0 10px 12px;
++}
++html[data-glass="1"] .sty-main.desk-writing .sty-stage-scroll {
++  padding-top: var(--desk-top-h, 0px);
++  padding-bottom: var(--desk-bottom-h, 0px);
++}
+diff --git a/frontend/app/layout.tsx b/frontend/app/layout.tsx
+index ef5efdf..2991787 100644
+--- a/frontend/app/layout.tsx
++++ b/frontend/app/layout.tsx
+@@ -20,6 +20,11 @@ export default function RootLayout({
+   return (
+     <html lang="zh-CN" data-theme="sage" className="h-full antialiased" suppressHydrationWarning>
+       <body className="min-h-full flex flex-col">
++        {/* 开机先把存的墙纸/玻璃/字体写到 <html> 上,免得首屏闪一下默认色。逻辑跟 study/deskTheme.tsx
++            的 applySkin 同一套(这里必须是内联脚本,等不了 React 水合),改一处记得改另一处。 */}
++        <script
++          dangerouslySetInnerHTML={{ __html: `(function(){try{var s=JSON.parse(localStorage.getItem('tavern-desk.skin')||'{}')||{};var ok={sage:1,ink:1,rice:1,bronze:1};var d=document.documentElement;var t=s.theme;if(t==='auto'){var dark=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches;t=dark?(ok[s.night]?s.night:'ink'):(ok[s.day]?s.day:'sage');}d.dataset.theme=ok[t]?t:'sage';if(s.glass)d.dataset.glass='1';if(s.font&&s.font.file){var st=document.createElement('style');st.id='desk-reading-font';st.textContent='@font-face{font-family:"desk-reading";src:url("/fonts/'+encodeURIComponent(s.font.file)+'");font-display:swap}';document.head.appendChild(st);d.style.setProperty('--font-reading-user','"desk-reading"');}}catch(e){}})();` }}
++        />
+         {/* React 会把这些 <link> 提升进 <head> */}
+         <link rel="preconnect" href="https://fonts.googleapis.com" />
+         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+diff --git a/frontend/app/study/TypingDesk.tsx b/frontend/app/study/TypingDesk.tsx
+index a9f1466..071e5ff 100644
+--- a/frontend/app/study/TypingDesk.tsx
++++ b/frontend/app/study/TypingDesk.tsx
+@@ -139,6 +139,10 @@ function fmtTime(iso?: string): string {
+     return `${date} ${time}`;
+   } catch { return ''; }
+ }
++// 输入框自动长高的上限:手机上五行左右就封顶,再多在框里滚,不把楼层顶出屏幕
++function composerCap(): number {
++  return typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches ? 132 : 240;
++}
+ function grow(el: HTMLTextAreaElement | null, composing = false, cap = 240) {
+   if (!el) return;
+   // 楼层行内编辑:height='auto'→重设成scrollHeight这套自增高手法,每次都会强制一次同步reflow
+@@ -321,7 +325,7 @@ function FloorReportView({ report }: { report: FloorReport | null | undefined })
+   return (
+     <div className="mt-1.5 max-w-[85%] max-[760px]:max-w-[92%] border border-dashed border-dash-line rounded-xl bg-card/80 px-4 py-3 font-mono text-[11px] leading-relaxed text-ink-body break-all whitespace-pre-wrap">
+       {report.stateBoardStale && (
+-        <div style={{ color: '#c2693f', marginBottom: 6 }}>
++        <div style={{ color: 'var(--warn)', marginBottom: 6 }}>
+           {Array.isArray(report.stateBoardGateErrors) && report.stateBoardGateErrors.length
+             ? `模型这楼写的状态板没过协议闸(${report.stateBoardGateErrors.join(';')}),没敢用,沿用旧板`
+             : '这楼的状态板没解析出来,沿用旧板'}
+@@ -413,7 +417,7 @@ function FloorActionRow({
+   afterReroll?: React.ReactNode;
+ }) {
+   return (
+-    <div className="flex items-center gap-3 px-1.5 flex-wrap">
++    <div className="floor-meta flex items-center gap-3 px-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+       {/* 动作条顺序统一:assistant楼新序=复制、编辑、素颜/美化、透视、重roll
+           (复制/编辑排前两位;素颜/美化即extra,原来插在
+           复制和编辑之间,现挪到编辑之后)。user楼没有复制/透视(isAssistant一律false),extra
+@@ -461,13 +465,23 @@ function FloorActionRow({
+ // 组件这时还没被卸载,横幅出得来),放行就顺手把飞着的流掐掉+世界代数翻篇(genRef++)再返回 true。
+ export type TypingDeskHandle = { requestLeave: () => boolean };
+ 
+-const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; onBack: () => void }>(function TypingDesk({ base, envOk, onBack }, deskRef) {
++const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean; onBack: () => void; onModeChange?: (mode: 'list' | 'write') => void }>(function TypingDesk({ base, envOk, onBack, onModeChange }, deskRef) {
+   // 壳槽位(见 studyShell.tsx):topEl/bottomEl 是头尾栏 portal 目标,scrollEl 是应用滚动唯一量尺。
+   const { topEl, bottomEl, scrollEl } = useStudyShell();
+   // 应用滚动的合法上限与钳制:落底/锚定一律走这两把尺。
+   const docBottomTop = useCallback(() => Math.max(0, (scrollEl?.scrollHeight ?? 0) - (scrollEl?.clientHeight ?? 0)), [scrollEl]);
+   const clampScrollTop = useCallback((top: number) => Math.min(docBottomTop(), Math.max(0, top)), [docBottomTop]);
+   const [mode, setMode] = useState<'list' | 'write'>('list');
++  // 告诉 page.tsx 现在是列表屏还是写作屏:手机上写作屏要把底栏藏掉,玻璃模式下头尾栏要浮起来。
++  // 走 ref 免得父级每次渲染传新函数就重跑;卸载时报一声 list,底栏回来。
++  const onModeChangeRef = useRef(onModeChange);
++  onModeChangeRef.current = onModeChange;
++  useEffect(() => {
++    onModeChangeRef.current?.(mode);
++    return () => { onModeChangeRef.current?.('list'); };
++  }, [mode]);
++  // 楼层动作条(复制/编辑/第几楼)手机上默认藏着,点一下楼层才出;记当前点开的是哪一楼
++  const [metaOpenKey, setMetaOpenKey] = useState<string | null>(null);
+   const [projects, setProjects] = useState<string[]>(DEFAULT_PROJECTS);
+   const [project, setProject] = useState<string>(DEFAULT_PROJECTS[0]);
+   // 向导里手建的项目名登记簿——三路来源的异步拉取完成时必须并上它,不许把刚手建的项目
+@@ -1020,6 +1034,26 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+   // 系统性偏矮一截,浮窗标题会叠进头栏底边被盖住。
+   const headerRef = useRef<HTMLElement>(null);
+   const footerRef = useRef<HTMLElement>(null);
++  // 玻璃模式下头栏/底栏脱离文档流浮在滚动区上(globals.css html[data-glass] 那段),滚动区要按
++  // 顶槽/底槽(含刘海让位和外边距)的真实高度留边:量出来写进 --desk-top-h / --desk-bottom-h。
++  // 不开玻璃时这两个变量没人读,量了也无妨。
++  useEffect(() => {
++    if (mode !== 'write' || typeof ResizeObserver === 'undefined') return;
++    const style = document.documentElement.style;
++    const measure = () => {
++      const h = topEl?.getBoundingClientRect().height || 0;
++      const f = bottomEl?.getBoundingClientRect().height || 0;
++      style.setProperty('--desk-top-h', `${Math.ceil(h)}px`);
++      style.setProperty('--desk-bottom-h', `${Math.ceil(f)}px`);
++    };
++    const ro = new ResizeObserver(measure);
++    if (topEl) ro.observe(topEl);
++    if (bottomEl) ro.observe(bottomEl);
++    if (headerRef.current) ro.observe(headerRef.current);
++    if (footerRef.current) ro.observe(footerRef.current);
++    measure();
++    return () => { ro.disconnect(); style.removeProperty('--desk-top-h'); style.removeProperty('--desk-bottom-h'); };
++  }, [mode, topEl, bottomEl]);
+   const [footerH, setFooterH] = useState(88);
+   // 浮窗 fixed 钉视口后的水平尺:对齐写作列(视口减竖廊),从头栏实测矩形取 left/width——
+   // 头栏 sticky 在列内、恒与列同宽,是现成的列尺;竖廊收展会改头栏宽度,同一个 RO 自然跟手。
+@@ -3238,13 +3272,13 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+     // 头栏 portal 进壳的顶槽(见 studyShell.tsx):z-8(< 侧栏本体z-9,> 背板z-7),
+     // 归位到统一定序,见 DeskDrawers.tsx 侧栏本体 zIndex 声明处注释。
+     const header = (
+-      <header ref={headerRef} className="flex-none z-[8] bg-page/85 backdrop-blur border-b border-line-soft px-6 py-3 max-[760px]:px-3.5 max-[760px]:pt-3 max-[760px]:pb-[11px]">
++      <header ref={headerRef} className="desk-header flex-none z-[8] bg-page/85 backdrop-blur border-b border-line-soft px-6 pb-3 max-[760px]:px-3.5 max-[760px]:pb-[11px]" style={{ paddingTop: 'calc(12px + var(--safe-top, env(safe-area-inset-top, 0px)))' }}>
+           <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
+             <div className="flex items-center gap-3 min-w-0">
+               <button onClick={backToList} className="serc pill inline-flex items-center gap-2 text-sm text-ink-body bg-card border border-line-soft px-4 py-1.5 rounded-full whitespace-nowrap">← 返回</button>
+               <div className="min-w-0">
+                 <div className="serc text-lg text-ink-deep truncate">{win?.title || (winLoadLoading ? '…' : '未命名窗口')}</div>
+-                {win && <div className="ser text-[11px] text-ink2 truncate">{win.project}</div>}
++                {win && <div className="ser text-[11px] text-ink2 truncate max-[700px]:hidden">{win.project}</div>}
+               </div>
+             </div>
+             <div className="flex items-center gap-2 flex-none">
+@@ -3263,30 +3297,30 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+               <button
+                 onClick={() => setWriteDrawerOpen(true)}
+                 title="文具盒：本窗设置·积木/配方·正则·核心记忆·导入"
+-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
++                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+               >
+                 文
+               </button>
+               <button
+                 onClick={toggleLorePanel}
+                 title="世界书：核心记忆 + 设定/大纲/角色卡·触发关键词"
+-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
++                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+               >
+                 世
+               </button>
+               {/* 项目级 │ 本窗级 的分界线 */}
+-              <span aria-hidden className="self-stretch w-px my-[3px] bg-line-soft shrink-0" />
++              <span aria-hidden className="self-stretch w-px my-[3px] bg-line-soft shrink-0 max-[700px]:hidden" />
+               <button
+                 onClick={toggleTimelinePanel}
+                 title="时光带（本窗）"
+-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
++                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+               >
+                 时
+               </button>
+               <button
+                 onClick={toggleBoardPanel}
+                 title="状态板（本窗）"
+-                className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
++                className="desk-pill max-[700px]:hidden serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+               >
+                 态
+               </button>
+@@ -3297,14 +3331,22 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 <button
+                   onClick={() => setMenuOpen((v) => !v)}
+                   title="更多：导出正文 / 立即压缩"
+-                  className="serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
++                  className="desk-pill serc inline-flex items-center justify-center shrink-0 cursor-pointer hover:brightness-[.97] transition w-[38px] h-[38px] rounded-xl bg-card border border-line-soft text-sm text-ink-body"
+                 >
+                   ⋯
+                 </button>
+                 {menuOpen && (
+                   <>
+                     <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+-                    <div className="absolute right-0 mt-2 w-52 bg-card border border-line-soft rounded-2xl shadow-lg p-1.5 z-20 text-sm">
++                    <div className="desk-menu absolute right-0 mt-2 w-52 bg-card border border-line-soft rounded-2xl shadow-lg p-1.5 z-20 text-sm">
++                      {/* 手机上顶栏那四颗单字钮藏起来了,从这儿进(桌面上这一组不显示,钮还在顶栏) */}
++                      <div className="hidden max-[700px]:block">
++                        <button onClick={() => { setMenuOpen(false); setWriteDrawerOpen(true); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">文</span>文具盒</button>
++                        <button onClick={() => { setMenuOpen(false); toggleLorePanel(); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">世</span>世界书</button>
++                        <button onClick={() => { setMenuOpen(false); toggleTimelinePanel(); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">时</span>时光带</button>
++                        <button onClick={() => { setMenuOpen(false); toggleBoardPanel(); }} className="serc w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-page text-ink-body"><span className="w-5 text-center">态</span>状态板</button>
++                        <div className="my-1 border-t border-line-soft" />
++                      </div>
+                       <button
+                         onClick={() => doExport()}
+                         disabled={sending}
+@@ -3352,10 +3394,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+           // 点按钮也会短暂立旗,但按下到抬起之间撞上一块流的概率毫秒级,无害。
+           // (ref 只当"选区在不在对话区"的包含判定根用,不是滚动容器——滚动主体是壳的 scrollEl)
+           onPointerDown={(e) => { if (e.button === 0) dragSelectingRef.current = true; }}
+-          className="relative z-[1] px-6 py-8 max-[760px]:px-4"
++          className="desk-main relative z-[1] px-6 py-8 max-[760px]:px-4"
+         >
+           <div className="max-w-2xl mx-auto space-y-5">
+-            {winDelError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>{winDelError}</div>}
++            {winDelError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>{winDelError}</div>}
+             {/* 下行正则规则表拉取失败的一行淡提示——降级为无操作,不拦楼层照常读写(工单点2) */}
+             {downRulesNotice && <div className="text-[11.5px] text-center text-ink2">{downRulesNotice}</div>}
+             {/* ⋯ 菜单的回执位。压缩是同步等 30~100 秒的动作,菜单点完就关了,在飞态必须在
+@@ -3363,10 +3405,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 但那更像坏了)。回执/报错各占一行,压缩期间先不显示上一轮的回执免得读串。 */}
+             {compressing && <div className="text-[11.5px] text-center text-ink2">🌀 正在把旧楼折进时光带…（要跑一趟模型，约半分钟，这期间先别发新楼）</div>}
+             {!compressing && compressNote && <div className="text-[11.5px] text-center text-ink2">{compressNote}</div>}
+-            {compressError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>压缩没成：{compressError}</div>}
+-            {exportError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>导出没成：{exportError}</div>}
++            {compressError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>压缩没成：{compressError}</div>}
++            {exportError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>导出没成：{exportError}</div>}
+             {winLoadLoading && <div className="text-ink2 text-sm text-center">推开这扇窗…</div>}
+-            {winLoadError && <div className="text-sm text-center" style={{ color: '#c2693f' }}>翻不开：{winLoadError}</div>}
++            {winLoadError && <div className="text-sm text-center" style={{ color: 'var(--warn)' }}>翻不开：{winLoadError}</div>}
+             {!winLoadLoading && !winLoadError && floors.length === 0 && (
+               <div className="text-ink2 text-sm text-center py-10">这扇窗还空着～写下第一段吧</div>
+             )}
+@@ -3389,7 +3431,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+               const floorIndex = floorOldCount + vi; // 楼层号按全量数组算,渲染窗滑动不许变号
+               if (f.role === 'user') {
+                 return (
+-                  <div key={f.key} className="flex flex-col items-end gap-1.5">
++                  <div key={f.key} className={`floor-group floor-user-wrap flex flex-col items-end gap-1.5${metaOpenKey === f.key ? ' meta-open' : ''}`} onClick={() => { if (window.getSelection()?.toString()) return; setMetaOpenKey((k) => (k === f.key ? null : f.key)); }}>
+                     {editingFloorKey === f.key ? (
+                       <div className="w-[85%] space-y-2">
+                         <textarea
+@@ -3400,7 +3442,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                           className="w-full resize-none rounded-[20px] border border-dashed border-dash-line bg-card px-4 py-2.5 text-ink-deep leading-relaxed focus:outline-none"
+                         />
+                         <div className="flex items-center justify-end gap-3">
+-                          {editError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{editError}</span>}
++                          {editError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{editError}</span>}
+                           <button onClick={cancelFloorEdit} disabled={editSaving} className="text-xs text-ink2 hover:text-ink-body">取消</button>
+                           {/* 任务2:user楼(非最后一楼)点这里先过二段确认,文案里的N实时算——见floorSaveLabel/onFloorSaveClick */}
+                           <button onClick={() => onFloorSaveClick(f)} disabled={editSaving || sending || !editDraft.trim()} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-4 py-1.5 disabled:opacity-40">
+@@ -3410,7 +3452,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                       </div>
+                     ) : (
+                       <>
+-                        <div className="max-w-[80%] max-[760px]:max-w-[86%] rounded-[20px] rounded-br-[6px] bg-scale-1 text-ink-deep px-[18px] py-3.5 wrap-hard whitespace-pre-wrap leading-relaxed">
++                        <div className="floor-user max-w-[80%] max-[760px]:max-w-[86%] rounded-[20px] rounded-br-[6px] bg-scale-1 text-ink-deep px-[18px] py-3.5 wrap-hard whitespace-pre-wrap leading-relaxed">
+                           {f.content}
+                         </div>
+                         <FloorActionRow
+@@ -3482,9 +3524,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+               ) : null;
+ 
+               return (
+-                <div key={f.key} className="flex flex-col items-start gap-1.5">
+-                  <div className="max-w-[88%] w-full space-y-2.5">
+-                    <div className="serc text-[11px] text-ink2 px-1">打字桌</div>
++                <div key={f.key} className={`floor-group flex flex-col items-start gap-1.5${metaOpenKey === f.key ? ' meta-open' : ''}`} onClick={() => { if (window.getSelection()?.toString()) return; setMetaOpenKey((k) => (k === f.key ? null : f.key)); }}>
++                  <div className="floor-ai-wrap max-w-[88%] w-full space-y-2.5">
++                    <div className="floor-ai-label serc text-[11px] text-ink2 px-1">打字桌</div>
+                     {thinkingText && (
+                       <details className="text-xs">
+                         <summary className="serc inline-flex items-center gap-2 cursor-pointer select-none text-ink-body bg-card/80 border border-dashed border-dash-line rounded-full px-3 py-1 list-none [&::-webkit-details-marker]:hidden">
+@@ -3503,7 +3545,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                           className="w-full resize-none rounded-[20px] border border-dashed border-dash-line bg-card px-4 py-2.5 text-ink-body leading-relaxed focus:outline-none"
+                         />
+                         <div className="flex items-center justify-end gap-3">
+-                          {editError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{editError}</span>}
++                          {editError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{editError}</span>}
+                           <button onClick={cancelFloorEdit} disabled={editSaving} className="text-xs text-ink2 hover:text-ink-body">取消</button>
+                           {/* assistant楼:onFloorSaveClick对非user角色直接转confirmFloorEdit,行为跟改动前一字不差 */}
+                           <button onClick={() => onFloorSaveClick(f)} disabled={editSaving || sending || !editDraft.trim()} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-4 py-1.5 disabled:opacity-40">
+@@ -3512,7 +3554,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                         </div>
+                       </div>
+                     ) : !body && segments.length <= 1 ? (
+-                      <div className="max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]">
++                      <div className="floor-ai max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]">
+                         <span className="text-ink2">{f.streaming ? '在写…' : ''}</span>
+                       </div>
+                     ) : (
+@@ -3536,7 +3578,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                                   <div
+                                     key={contentKey}
+                                     className="max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] border border-line-soft shadow-sm px-[18px] py-3 text-[12.5px] leading-relaxed"
+-                                    style={{ background: 'var(--card-bg)', color: '#c2693f' }}
++                                    style={{ background: 'var(--card-bg)', color: 'var(--warn)' }}
+                                   >
+                                     这张美化卡的脚本试图向外部地址导航,已被掐断——不影响素颜原文,可疑的话去文具盒正则页把对应规则关掉
+                                   </div>
+@@ -3603,7 +3645,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                           ) : seg.text.trim() ? (
+                             <div
+                               key={`${f.key}-seg-${i}`}
+-                              className="max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]"
++                              className="floor-ai max-w-[85%] max-[760px]:max-w-[92%] rounded-[20px] rounded-bl-[6px] bg-card border border-line-soft shadow-sm text-ink-body px-[22px] py-4 wrap-hard whitespace-pre-wrap leading-[1.9]"
+                             >
+                               {/* 两态一律分块渲染保选区(为什么落库后也分块:见 chunkStreamText 头注释⚠️段) */}
+                               {/* display:contents:分块 span 不生成行内盒,排版与单段文字等价(实验:iOS 内滚区下多 span 选区不画蓝) */}
+@@ -3635,7 +3677,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                   )}
+ 
+                   {f.variantsCount > 1 && (
+-                    <div className="flex items-center gap-2.5 px-1.5 text-xs text-ink2">
++                    <div className="floor-meta flex items-center gap-2.5 px-1.5 text-xs text-ink2" onClick={(e) => e.stopPropagation()}>
+                       <button
+                         disabled={sending || mutCount > 0 || editingFloorKey !== null || variantBusy[f.key] || f.activeVariant <= 0}
+                         onClick={() => switchVariant(f, f.activeVariant - 1)}
+@@ -3649,7 +3691,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                       >▶</button>
+                     </div>
+                   )}
+-                  {variantError && <div className="text-xs" style={{ color: '#c2693f' }}>{variantError}</div>}
++                  {variantError && <div className="text-xs" style={{ color: 'var(--warn)' }}>{variantError}</div>}
+ 
+                   {reportOpenKeys.has(f.key) && <FloorReportView report={f.report} />}
+                 </div>
+@@ -3672,10 +3714,10 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+           >
+             <div
+               className="max-w-2xl mx-auto flex items-start gap-3 text-sm rounded-2xl border px-4 py-3 shadow-md pointer-events-auto"
+-              style={{ color: '#c2693f', borderColor: '#c2693f', background: 'var(--card-bg)' }}
++              style={{ color: 'var(--warn)', borderColor: 'var(--warn)', background: 'var(--card-bg)' }}
+             >
+               <span className="flex-1">{deskError}</span>
+-              <button onClick={() => setDeskError('')} className="serc text-xs shrink-0 hover:opacity-70" style={{ color: '#c2693f' }}>知道了</button>
++              <button onClick={() => setDeskError('')} className="serc text-xs shrink-0 hover:opacity-70" style={{ color: 'var(--warn)' }}>知道了</button>
+             </div>
+           </div>
+         )}
+@@ -3738,7 +3780,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                   <div className="rounded-xl border border-dashed border-dash-line px-3 py-3 text-xs text-ink2">暂无时光带正文</div>
+                 )}
+                 <div className="flex items-center justify-end gap-3 mt-2.5">
+-                  {timelineError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{timelineError}</span>}
++                  {timelineError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{timelineError}</span>}
+                   <button
+                     onClick={saveTimeline}
+                     disabled={!timelineDirty || sending || timelineSaving || compressing || !timelineDraft.length}
+@@ -3800,7 +3842,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 </div>
+                 <span className="text-[11px] text-ink2">紧挨本楼输入,不再插进旧楼层</span>
+                 <div className="ml-auto flex items-center gap-3">
+-                  {noteError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{noteError}</span>}
++                  {noteError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{noteError}</span>}
+                   <button onClick={() => setNoteOpen(false)} disabled={noteSaving} className="text-xs text-ink2 hover:text-ink-body">取消</button>
+                   <button onClick={saveNote} disabled={noteSaving} className="rounded-xl bg-accent hover:brightness-105 text-white text-xs px-4 py-1.5 disabled:opacity-40">
+                     {noteSaving ? '保存中…' : '保存'}
+@@ -3837,8 +3879,8 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                     title="按最近一条 AI 楼(改过之后的)正文重算一份状态板，填进草稿等你确认；后面跟着你的消息也能刷"
+                     className="serc text-[11.5px] rounded-xl border px-3 py-1 disabled:opacity-40"
+                     style={{
+-                      color: refreshArm ? '#c0573f' : 'var(--ink-body)',
+-                      borderColor: refreshArm ? '#c0573f' : 'var(--line-soft)',
++                      color: refreshArm ? 'var(--warn)' : 'var(--ink-body)',
++                      borderColor: refreshArm ? 'var(--warn)' : 'var(--line-soft)',
+                       background: 'var(--card-bg)',
+                     }}
+                   >
+@@ -3853,9 +3895,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                   不自动合并(宁明说不瞎猜),只给一条明路:看新板就整份重载(丢草稿),
+                   想留改动就先复制出去,回头重新点开面板照抄回来 */}
+               {boardConflict && (
+-                <div className="flex items-center gap-3 flex-wrap mb-2.5 text-[11.5px] rounded-xl border px-3 py-2" style={{ color: '#c2693f', borderColor: '#c2693f', background: 'var(--card-bg)' }}>
++                <div className="flex items-center gap-3 flex-wrap mb-2.5 text-[11.5px] rounded-xl border px-3 py-2" style={{ color: 'var(--warn)', borderColor: 'var(--warn)', background: 'var(--card-bg)' }}>
+                   <span className="flex-1">生成往板上写了新内容,你的草稿基于旧板——点"看新板"丢弃草稿重载,或复制你的改动后重来</span>
+-                  <button onClick={viewNewBoard} className="serc shrink-0 rounded-lg border px-2.5 py-1" style={{ color: '#c2693f', borderColor: '#c2693f' }}>看新板(丢弃草稿)</button>
++                  <button onClick={viewNewBoard} className="serc shrink-0 rounded-lg border px-2.5 py-1" style={{ color: 'var(--warn)', borderColor: 'var(--warn)' }}>看新板(丢弃草稿)</button>
+                 </div>
+               )}
+               {/* 重名/空名边打边校验(任务点4+7):topBadKeys 标顶层,每个object行自己的subBadKeys
+@@ -3870,7 +3912,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                     <div className="rounded-2xl border border-dashed border-dash-line overflow-hidden">
+                       {boardDraft.map((row, i) => {
+                         const keyBad = topBadKeys.has(i);
+-                        const keyInputCls = `serc w-24 flex-none rounded-lg border bg-page px-2 py-1 text-xs text-ink-body focus:outline-none disabled:opacity-50 ${keyBad ? 'border-[#c2693f]' : 'border-line-soft'}`;
++                        const keyInputCls = `serc w-24 flex-none rounded-lg border bg-page px-2 py-1 text-xs text-ink-body focus:outline-none disabled:opacity-50 ${keyBad ? 'border-[var(--warn)]' : 'border-line-soft'}`;
+                         if (row.rawKind === 'object') {
+                           const subRows = row.subRows || [];
+                           const subBadKeys = findBadKeyIndexes(subRows);
+@@ -3892,7 +3934,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                                   onClick={() => removeBoardRow(i)}
+                                   disabled={sending || boardSaving || boardRefreshing}
+                                   title="连这个键带下面所有子行一起删掉(保存前都是草稿)"
+-                                  className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[#c2693f] disabled:opacity-30"
++                                  className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[var(--warn)] disabled:opacity-30"
+                                 >删整项</button>
+                               </div>
+                               <div className="mt-1.5 ml-1 pl-2.5 border-l-2 border-dashed border-dash-line space-y-1.5">
+@@ -3905,7 +3947,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                                         onChange={(e) => updateBoardSubRowKey(i, si, e.target.value)}
+                                         placeholder="键名"
+                                         disabled={sending || boardSaving || boardRefreshing}
+-                                        className={`serc w-20 flex-none rounded-lg border bg-page px-2 py-1 text-[11px] text-ink-body focus:outline-none disabled:opacity-50 ${subKeyBad ? 'border-[#c2693f]' : 'border-line-soft'}`}
++                                        className={`serc w-20 flex-none rounded-lg border bg-page px-2 py-1 text-[11px] text-ink-body focus:outline-none disabled:opacity-50 ${subKeyBad ? 'border-[var(--warn)]' : 'border-line-soft'}`}
+                                       />
+                                       <input
+                                         value={sr.value}
+@@ -3928,7 +3970,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                                         onClick={() => onBoardSubDeleteClick(i, si, sr.id)}
+                                         disabled={sending || boardSaving || boardRefreshing}
+                                         title="删掉这一子行(保存前都是草稿)"
+-                                        className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[#c2693f] disabled:opacity-30"
++                                        className="shrink-0 leading-none text-[11px] text-ink2 hover:text-[var(--warn)] disabled:opacity-30"
+                                       >{boardSubDelStage[sr.id] === 1 ? '确定删?' : '删'}</button>
+                                     </div>
+                                   );
+@@ -3973,7 +4015,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                               onClick={() => removeBoardRow(i)}
+                               disabled={sending || boardSaving || boardRefreshing}
+                               title="删掉这一行(保存前都是草稿)"
+-                              className="shrink-0 leading-none text-xs text-ink2 hover:text-[#c2693f] disabled:opacity-30"
++                              className="shrink-0 leading-none text-xs text-ink2 hover:text-[var(--warn)] disabled:opacity-30"
+                             >删</button>
+                           </div>
+                         );
+@@ -3982,9 +4024,9 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                     </div>
+                     <div className="flex items-center gap-3 mt-2.5 flex-wrap">
+                       <button onClick={addBoardRow} disabled={sending || boardSaving || boardRefreshing} className="text-xs text-ink2 hover:text-ink-body disabled:opacity-40">＋加一行</button>
+-                      {boardHasKeyErrors && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>有键名是空的或者重复了,标红的那几格先改掉</span>}
++                      {boardHasKeyErrors && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>有键名是空的或者重复了,标红的那几格先改掉</span>}
+                       <div className="ml-auto flex items-center gap-3">
+-                        {boardError && <span className="text-[11.5px]" style={{ color: '#c2693f' }}>{boardError}</span>}
++                        {boardError && <span className="text-[11.5px]" style={{ color: 'var(--warn)' }}>{boardError}</span>}
+                         <button onClick={closeBoardPanel} disabled={boardSaving} className="text-xs text-ink2 hover:text-ink-body">
+                           {boardArm === 'close' ? '不保存关闭?再点一次' : '取消'}
+                         </button>
+@@ -4019,7 +4061,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 {dryrunLoading ? (
+                   <div style={{ fontSize: 13, color: 'var(--ink2)' }}>正在裸跑装配…</div>
+                 ) : dryrunError ? (
+-                  <div style={{ fontSize: 13, color: '#c2693f' }}>{dryrunError}</div>
++                  <div style={{ fontSize: 13, color: 'var(--warn)' }}>{dryrunError}</div>
+                 ) : dryrunReport ? (
+                   <FloorReportView report={dryrunReport} />
+                 ) : null}
+@@ -4032,17 +4074,18 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+ 
+         {/* 底栏 portal 进壳的底槽(见 studyShell.tsx)。 */}
+         {bottomEl && createPortal((
+-        <footer ref={footerRef} className="chat-inputbar flex-none z-[2] bg-page/85 backdrop-blur border-t border-line-soft px-6 pt-4 pb-5 max-[760px]:px-3.5">
++        <footer ref={footerRef} className="chat-inputbar flex-none z-[2] bg-page/85 backdrop-blur border-t border-line-soft px-6 pt-4 pb-5 max-[760px]:px-3.5 max-[700px]:px-3 max-[700px]:pt-2 max-[700px]:pb-[10px]">
+           {/* 服务端收尾进度话(status 事件):正文已经流完、done 还没来的那段(状态板自动补算约半分钟)给个交代 */}
+           {sending && streamStatus && (
+             <div className="max-w-2xl mx-auto text-[11.5px] text-ink2 mb-2">{streamStatus}</div>
+           )}
+-          <div className="max-w-2xl mx-auto flex items-end gap-2.5">
++          {/* 手机上折成两行:上一行 透视/纸条 两颗小钮,下一行 输入框铺满 + 发送;那颗空 span 是换行用的 */}
++          <div className="max-w-2xl mx-auto flex items-end gap-2.5 flex-wrap max-[700px]:gap-2">
+             <button
+               onClick={doDryrun}
+               disabled={!curWindowId}
+               title="透视下一楼(裸看装配结果,不真的发)"
+-              className="serc rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center disabled:opacity-40"
++              className="desk-pill serc rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs"
+             >
+               透视
+             </button>
+@@ -4052,15 +4095,16 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+             <button
+               onClick={toggleNoteDrawer}
+               title="导演小纸条：给下一楼的临时指令"
+-              className="serc relative rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center"
++              className="desk-pill serc relative rounded-[18px] bg-card border border-line-soft hover:brightness-[.97] text-ink-body text-sm w-12 h-12 shrink-0 flex items-center justify-center max-[700px]:order-1 max-[700px]:w-auto max-[700px]:h-8 max-[700px]:px-3 max-[700px]:rounded-full max-[700px]:text-xs max-[700px]:mr-auto"
+             >
+               纸条
+               {win?.note?.trim() && <span className="absolute top-1.5 right-1.5 w-[6px] h-[6px] rounded-full bg-accent" />}
+             </button>
++            <span aria-hidden className="hidden max-[700px]:block max-[700px]:order-2 max-[700px]:basis-full max-[700px]:h-0" />
+             {/* 这层relative容器专给@候选下拉当锚点——只裹textarea本体(flex-1从textarea挪到这层容器上,
+                 textarea自己改w-full),不是整条footer行,这样浮层"锚在输入框正上方"才不会被
+                 左边透视/纸条按钮、右边发送按钮的宽度带偏。 */}
+-            <div className="relative flex-1">
++            <div className="relative flex-1 max-[700px]:order-3 max-[700px]:min-w-0">
+               {/* @候选下拉(规格⑦):bottom-full+mb-2锚在输入框正上方;z-[3]沿用文件里既有的
+                   "压过footer(z-[2])、不够贴头栏z-[8]/侧栏z-[9]"这套换算(小纸条/时光带那几处浮层同款),
+                   抽屉更高不受影响。候选项的blur/click时序用"onMouseDown里preventDefault"——桌面上让
+@@ -4092,7 +4136,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                   // 自然会带着最终文本重算一遍,不用另外再挂compositionend去重算。
+                   if (!(e.nativeEvent as InputEvent).isComposing) recomputeAtMenu(e.currentTarget);
+                 }}
+-                onInput={(e) => grow(e.currentTarget, (e.nativeEvent as InputEvent).isComposing === true)}
++                onInput={(e) => grow(e.currentTarget, (e.nativeEvent as InputEvent).isComposing === true, composerCap())}
+                 onSelect={(e) => { if (!composingRef.current) recomputeAtMenu(e.currentTarget); }}
+                 onCompositionStart={() => { composingRef.current = true; setAtMenuOpen(false); }} // 组字一开始就收菜单:不给"组字中点旧候选"留窗口,指针路径的IME破坏面从根上封掉
+                 onCompositionEnd={() => { composingRef.current = false; }}
+@@ -4100,15 +4144,15 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 onBlur={() => setAtMenuOpen(false)}
+                 rows={1}
+                 placeholder="接着写点什么…"
+-                className="w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto"
++                className="w-full resize-none rounded-[20px] border border-line-soft bg-card px-[18px] min-h-12 py-3 text-ink-body leading-relaxed focus:outline-none focus:border-accent overflow-y-auto max-[700px]:min-h-11 max-[700px]:py-[11px] max-[700px]:px-3.5 max-[700px]:rounded-2xl max-[700px]:text-[15px]"
+               />
+             </div>
+             {sending && turnKind !== null ? (
+-              <button onClick={() => abortRef.current?.abort()} className="serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center">
++              <button onClick={() => abortRef.current?.abort()} className="desk-send serc rounded-[18px] bg-ink2 hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+                 ■ 暂停
+               </button>
+             ) : (
+-              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40">
++              <button onClick={() => send()} disabled={!input.trim() || sending || mutCount > 0} className="desk-send serc rounded-[18px] bg-accent hover:brightness-105 text-white text-sm px-7 h-12 shrink-0 flex items-center justify-center disabled:opacity-40 max-[700px]:order-4 max-[700px]:h-11 max-[700px]:px-[18px] max-[700px]:rounded-2xl">
+                 发送
+               </button>
+             )}
+@@ -4161,7 +4205,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+   // HeatBg 交给 page.tsx 那一份画,这里不重复画。
+   return (
+     <div style={{ position: 'relative', flex: '1 1 auto', boxSizing: 'border-box', background: 'var(--page-bg)', fontFamily: 'var(--font-sans)', display: 'flex', flexDirection: 'column' }}>
+-      <div style={{ flex: '1 1 auto', padding: '34px 28px 72px' }}>
++      <div className="desk-list" style={{ flex: '1 1 auto', padding: 'calc(34px + var(--safe-top, env(safe-area-inset-top, 0px))) 28px 72px' }}>
+       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+ 
+         {/* 下面 DeskDrawerHub 的点外部关闭用 absolute
+@@ -4209,12 +4253,12 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+           })}
+         </div>
+ 
+-        {winDelError && <div style={{ fontSize: 12.5, color: '#c2693f', marginBottom: 12 }}>{winDelError}</div>}
++        {winDelError && <div style={{ fontSize: 12.5, color: 'var(--warn)', marginBottom: 12 }}>{winDelError}</div>}
+ 
+         {winListLoading ? (
+           <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>正在翻这屋的窗户…</div>
+         ) : winListError ? (
+-          <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: '#c2693f' }}>翻不开：{winListError}</div>
++          <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--warn)' }}>翻不开：{winListError}</div>
+         ) : windows.length === 0 ? (
+           <div className="card" style={{ ...glassCardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>这个项目还没开过窗~点右上角开第一扇</div>
+         ) : (
+@@ -4228,7 +4272,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                     className="serc"
+                     style={{
+                       fontSize: 11, flex: 'none', border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit',
+-                      color: (winDelStage[w.id] || 0) === 1 ? '#c2693f' : 'var(--ink2)',
++                      color: (winDelStage[w.id] || 0) === 1 ? 'var(--warn)' : 'var(--ink2)',
+                     }}
+                   >
+                     {(winDelStage[w.id] || 0) === 1 ? '真的删?再点一次' : '删除'}
+@@ -4285,7 +4329,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                 {wizRecipesLoading ? (
+                   <div style={{ fontSize: 13, color: 'var(--ink2)', marginBottom: 22 }}>正在翻配方本…</div>
+                 ) : wizRecipesError ? (
+-                  <div style={{ fontSize: 13, color: '#c2693f', marginBottom: 22 }}>翻不开：{wizRecipesError}</div>
++                  <div style={{ fontSize: 13, color: 'var(--warn)', marginBottom: 22 }}>翻不开：{wizRecipesError}</div>
+                 ) : wizMiniOpen ? (
+                   <div style={{ marginBottom: 22, background: 'var(--scale-0)', borderRadius: 16, padding: '16px 18px' }}>
+                     <div style={{ fontSize: 12.5, color: 'var(--ink2)', marginBottom: 10 }}>这个项目还没配方,就地建一份~</div>
+@@ -4294,7 +4338,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                       {wizPresetsLoading ? (
+                         <div style={{ fontSize: 12.5, color: 'var(--ink2)' }}>翻预设包…</div>
+                       ) : wizPresetsError ? (
+-                        <div style={{ fontSize: 12.5, color: '#c2693f' }}>{wizPresetsError}</div>
++                        <div style={{ fontSize: 12.5, color: 'var(--warn)' }}>{wizPresetsError}</div>
+                       ) : wizPresets.length === 0 ? (
+                         <div style={{ fontSize: 12.5, color: 'var(--ink2)' }}>还没导过预设包——去导入器先导一份(面板功能尚未提供,现在只能手动跑)</div>
+                       ) : (
+@@ -4318,7 +4362,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                           </button>
+                         ))}
+                       </div>
+-                      {wizMiniError && <div style={{ fontSize: 12, color: '#c2693f' }}>{wizMiniError}</div>}
++                      {wizMiniError && <div style={{ fontSize: 12, color: 'var(--warn)' }}>{wizMiniError}</div>}
+                       <button
+                         onClick={createMiniRecipe}
+                         disabled={wizMiniCreating || !wizMiniName.trim() || !wizMiniPresetId}
+@@ -4345,7 +4389,7 @@ const TypingDesk = forwardRef<TypingDeskHandle, { base: string; envOk: boolean;
+                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink2)', letterSpacing: 1.5, margin: '18px 0 8px' }}>③ 标题(可选)</div>
+                     <input value={wizTitle} onChange={(e) => setWizTitle(e.target.value)} placeholder="不填就叫「未命名窗口」" style={{ ...inputStyle, marginBottom: 18 }} />
+ 
+-                    {wizError && <div style={{ fontSize: 13, color: '#c2693f', marginBottom: 12 }}>{wizError}</div>}
++                    {wizError && <div style={{ fontSize: 13, color: 'var(--warn)', marginBottom: 12 }}>{wizError}</div>}
+                     <button
+                       onClick={createWindow}
+                       disabled={!wizRecipeId || wizCreating}
+diff --git a/frontend/app/study/deskTheme.tsx b/frontend/app/study/deskTheme.tsx
+new file mode 100644
+index 0000000..7a858ec
+--- /dev/null
++++ b/frontend/app/study/deskTheme.tsx
+@@ -0,0 +1,181 @@
++'use client';
++// 墙纸、玻璃、正文字体——本机偏好,存在这台设备的浏览器里(localStorage['tavern-desk.skin']),
++// 跟口令同一个地方,刷新即用。四套墙纸的变量在 globals.css;layout.tsx 里有一段开机脚本先把
++// 存的选择写到 <html> 上,首屏不闪白——那段脚本和这里的 applySkin 是同一套逻辑,改一处记得改另一处。
++// 本机字体:宿主把字体文件放在 host/fonts/,/fonts/index.json 列出来,这里拉清单让人选;选中的那款
++// 用 @font-face 挂成 "desk-reading",正文通过 --font-reading-user 用它(见 globals.css 注释)。
++import { useEffect, useState } from 'react';
++
++export const SKIN_KEY = 'tavern-desk.skin';
++export type ThemeId = 'sage' | 'ink' | 'rice' | 'bronze';
++export type SkinFont = { name: string; file: string };
++export type Skin = { theme?: ThemeId | 'auto'; day?: ThemeId; night?: ThemeId; glass?: boolean; font?: SkinFont | null };
++
++export const THEMES: { id: ThemeId; name: string; night: boolean }[] = [
++  { id: 'sage', name: '纸绿', night: false },
++  { id: 'rice', name: '米纸', night: false },
++  { id: 'ink', name: '墨夜', night: true },
++  { id: 'bronze', name: '乌金', night: true },
++];
++const THEME_IDS = new Set<string>(THEMES.map((t) => t.id));
++
++export function readSkin(): Skin {
++  try {
++    const raw = JSON.parse(localStorage.getItem(SKIN_KEY) || '{}');
++    return raw && typeof raw === 'object' ? raw : {};
++  } catch { return {}; }
++}
++export function writeSkin(s: Skin): void {
++  try { localStorage.setItem(SKIN_KEY, JSON.stringify(s)); } catch { /* 隐私模式等:只在这一次打开里有效 */ }
++}
++
++function pick(id: unknown, fallback: ThemeId): ThemeId {
++  return typeof id === 'string' && THEME_IDS.has(id) ? (id as ThemeId) : fallback;
++}
++export function resolveTheme(s: Skin): ThemeId {
++  if (s.theme === 'auto') {
++    const dark = typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
++    return dark ? pick(s.night, 'ink') : pick(s.day, 'sage');
++  }
++  return pick(s.theme, 'sage');
++}
++
++const FONT_STYLE_ID = 'desk-reading-font';
++export function applySkin(s: Skin): void {
++  if (typeof document === 'undefined') return;
++  const d = document.documentElement;
++  d.dataset.theme = resolveTheme(s);
++  if (s.glass) d.dataset.glass = '1'; else delete d.dataset.glass;
++  let st = document.getElementById(FONT_STYLE_ID) as HTMLStyleElement | null;
++  if (s.font && s.font.file) {
++    if (!st) { st = document.createElement('style'); st.id = FONT_STYLE_ID; document.head.appendChild(st); }
++    st.textContent = `@font-face{font-family:"desk-reading";src:url("/fonts/${encodeURIComponent(s.font.file)}");font-display:swap}`;
++    d.style.setProperty('--font-reading-user', '"desk-reading"');
++  } else {
++    st?.remove();
++    d.style.removeProperty('--font-reading-user');
++  }
++  // 浏览器/壳的状态栏颜色跟着底色走
++  const bg = getComputedStyle(d).getPropertyValue('--page-bg').trim();
++  const meta = document.querySelector('meta[name="theme-color"]');
++  if (meta && bg) meta.setAttribute('content', bg);
++}
++
++// 挂在书房根组件上:挂载时按存的选择刷一遍(开机脚本没跑到的情况兜底),跟随系统时系统切明暗就跟着换。
++export function useSkinBoot(): void {
++  useEffect(() => {
++    applySkin(readSkin());
++    if (typeof matchMedia !== 'function') return;
++    const mq = matchMedia('(prefers-color-scheme: dark)');
++    const onChange = () => { const s = readSkin(); if (s.theme === 'auto') applySkin(s); };
++    mq.addEventListener('change', onChange);
++    return () => mq.removeEventListener('change', onChange);
++  }, []);
++}
++
++// ── 面板 ──
++const pill = (active: boolean): React.CSSProperties => ({
++  padding: '7px 14px', borderRadius: 999, fontSize: 13, cursor: 'pointer',
++  border: `1px solid ${active ? 'var(--accent)' : 'var(--line-soft)'}`,
++  background: active ? 'var(--accent)' : 'var(--card-bg)',
++  color: active ? 'var(--on-accent)' : 'var(--ink-body)',
++});
++const label: React.CSSProperties = { fontSize: 12, color: 'var(--ink2)', marginBottom: 8, letterSpacing: 1 };
++const row: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8 };
++
++export function SkinPanel({ open, onClose, onForgetToken }: { open: boolean; onClose: () => void; onForgetToken?: () => void }) {
++  const [skin, setSkin] = useState<Skin>({});
++  const [fonts, setFonts] = useState<SkinFont[] | null>(null); // null=还没拉到/宿主没有字体目录
++  const [fontsNote, setFontsNote] = useState('');
++
++  useEffect(() => {
++    if (!open) return;
++    setSkin(readSkin());
++    let cancelled = false;
++    (async () => {
++      try {
++        const res = await fetch('/fonts/index.json', { cache: 'no-cache' });
++        if (!res.ok) { if (!cancelled) { setFonts(null); setFontsNote(res.status === 404 ? '宿主没开字体目录' : `字体清单拉不到(${res.status})`); } return; }
++        const data = await res.json();
++        const list: SkinFont[] = Array.isArray(data) ? data.filter((x: any) => x && typeof x.name === 'string' && typeof x.file === 'string') : [];
++        if (!cancelled) { setFonts(list); setFontsNote(list.length ? '' : '字体目录是空的:把 .woff2/.ttf 放进宿主的 host/fonts/ 就有了'); }
++      } catch {
++        if (!cancelled) { setFonts(null); setFontsNote('字体清单拉不到'); }
++      }
++    })();
++    return () => { cancelled = true; };
++  }, [open]);
++
++  if (!open) return null;
++  const update = (patch: Partial<Skin>) => {
++    const next = { ...skin, ...patch };
++    setSkin(next); writeSkin(next); applySkin(next);
++  };
++  const auto = skin.theme === 'auto';
++  const current = resolveTheme(skin);
++
++  return (
++    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} role="dialog" aria-label="墙纸">
++      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: `rgba(var(--scrim-rgb), 0.55)` }} />
++      <div className="card" style={{ position: 'relative', width: '100%', maxWidth: 440, margin: '0 10px calc(10px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))', background: 'var(--card-bg)', border: '1px solid var(--line-soft)', borderRadius: 22, padding: '18px 18px 16px', boxShadow: '0 16px 48px var(--card-shadow2)', maxHeight: '82vh', overflowY: 'auto' }}>
++        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
++          <div className="serc" style={{ fontSize: 18, color: 'var(--ink-deep)' }}>墙纸</div>
++          <button type="button" onClick={onClose} className="serc" style={{ ...pill(false), padding: '5px 12px' }}>关</button>
++        </div>
++
++        <div style={{ marginBottom: 16 }}>
++          <div style={label}>墙纸</div>
++          <div style={row}>
++            {THEMES.map((t) => (
++              <button key={t.id} type="button" className="serc" style={pill(!auto && current === t.id)} onClick={() => update({ theme: t.id })}>{t.name}</button>
++            ))}
++            <button type="button" className="serc" style={pill(auto)} onClick={() => update({ theme: 'auto', day: pick(skin.day, 'sage'), night: pick(skin.night, 'ink') })}>跟随系统</button>
++          </div>
++          {auto && (
++            <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
++              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
++                <span style={{ fontSize: 12, color: 'var(--ink2)', width: 36 }}>白天</span>
++                {THEMES.filter((t) => !t.night).map((t) => (
++                  <button key={t.id} type="button" className="serc" style={pill(pick(skin.day, 'sage') === t.id)} onClick={() => update({ day: t.id })}>{t.name}</button>
++                ))}
++              </div>
++              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
++                <span style={{ fontSize: 12, color: 'var(--ink2)', width: 36 }}>夜里</span>
++                {THEMES.filter((t) => t.night).map((t) => (
++                  <button key={t.id} type="button" className="serc" style={pill(pick(skin.night, 'ink') === t.id)} onClick={() => update({ night: t.id })}>{t.name}</button>
++                ))}
++              </div>
++            </div>
++          )}
++        </div>
++
++        <div style={{ marginBottom: 16 }}>
++          <div style={label}>玻璃</div>
++          <div style={row}>
++            <button type="button" className="serc" style={pill(!skin.glass)} onClick={() => update({ glass: false })}>关</button>
++            <button type="button" className="serc" style={pill(!!skin.glass)} onClick={() => update({ glass: true })}>开</button>
++          </div>
++          <div style={{ fontSize: 11.5, color: 'var(--ink2)', marginTop: 6, lineHeight: 1.5 }}>顶栏、输入区、底栏做成浮着的磨砂玻璃。滑起来发涩就关掉。</div>
++        </div>
++
++        <div style={{ marginBottom: onForgetToken ? 16 : 0 }}>
++          <div style={label}>正文字体</div>
++          <div style={row}>
++            <button type="button" className="serc" style={pill(!skin.font)} onClick={() => update({ font: null })}>跟随主题</button>
++            {(fonts || []).map((f) => (
++              <button key={f.file} type="button" className="serc" style={pill(skin.font?.file === f.file)} onClick={() => update({ font: f })}>{f.name}</button>
++            ))}
++          </div>
++          {fontsNote && <div style={{ fontSize: 11.5, color: 'var(--ink2)', marginTop: 6, lineHeight: 1.5 }}>{fontsNote}</div>}
++        </div>
++
++        {onForgetToken && (
++          <div>
++            <div style={label}>口令</div>
++            <button type="button" className="serc" style={pill(false)} onClick={onForgetToken} title="清掉存在这台设备上的口令,重新输入">换口令</button>
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/frontend/app/study/page.tsx b/frontend/app/study/page.tsx
+index 7feeca6..053397a 100644
+--- a/frontend/app/study/page.tsx
++++ b/frontend/app/study/page.tsx
+@@ -8,6 +8,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } fr
+ import HeatBg from '../HeatBg';
+ import ReadingCorner from './ReadingCorner';
+ import TypingDesk, { type TypingDeskHandle } from './TypingDesk';
++import { SkinPanel, useSkinBoot } from './deskTheme';
+ import {
+   LoreTriggerFields, DEFAULT_LORE_TRIGGER, triggerKeysFromText, triggerModeForSave,
+   type LoreTriggerValue, type LorePosition, type CharacterFields,
+@@ -184,16 +185,36 @@ const RAIL_CSS = `
+ }
+ @media (max-width: 700px) {
+   .sty-shell { border: 0 !important; border-radius: 0 !important; flex-direction: column; }
+-  .sty-rail { width: 100%; flex-direction: row; align-items: center; gap: 8px; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line-soft); overflow-x: auto; overscroll-behavior-x: contain; }
+-  .sty-rail.collapsed { width: 100%; padding: 10px; }
+-  .sty-rail-brand { display: none; }
+-  .sty-rail-top, .sty-rail.collapsed .sty-rail-top { flex-direction: row; margin-bottom: 0; }
+-  .sty-rail-collapse { display: none; }
++  /* 手机:廊子改成底栏(家/书架/打字桌/读书角/墙纸),一指够得着;写作窗打开时整条让位给输入区。
++     顶上按壳报的刘海高度让位(--safe-top 由安卓壳写进来,浏览器里走 env())。 */
++  .sty-main { order: 1; }
++  .sty-rail { order: 2; width: 100%; flex-direction: row; align-items: stretch; gap: 0; padding: 6px 8px calc(8px + var(--safe-bottom, env(safe-area-inset-bottom, 0px))); border-right: 0; border-top: 1px solid var(--line-soft); overflow: visible; }
++  .sty-rail.collapsed { width: 100%; padding-left: 8px; padding-right: 8px; }
++  .sty-rail-pattern, .sty-rail-brand, .sty-rail-collapse, .sty-rail-forget { display: none; }
++  .sty-rail-top, .sty-rail.collapsed .sty-rail-top { flex: 1; flex-direction: row; margin-bottom: 0; }
+   .sty-rail.collapsed .sty-rail-label { display: inline; }
+-  .sty-rail-doors { flex-direction: row; gap: 4px; }
+-  .sty-rail-btn { width: auto; flex: none; }
++  .sty-rail-doors { flex: 3; flex-direction: row; gap: 0; }
++  .sty-rail-btn, .sty-rail.collapsed .sty-rail-btn { flex: 1; width: auto; flex-direction: column; justify-content: center; gap: 3px; padding: 4px 0; font-size: 11px; border-radius: 10px; }
++  .sty-rail-btn.active { box-shadow: none; background: var(--scale-0); }
++  .sty-rail-glyph { width: auto; font-size: 17px; line-height: 1; }
+   .sty-home { order: -1; margin-top: 0; }
+-  .sty-scroll { padding: 18px 16px 32px; }
++  .sty-rail-skin { flex: 1; margin-top: 0 !important; }
++  .sty-shell.writing .sty-rail { display: none; }
++  .sty-scroll { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 32px; }
++  .desk-list { padding: calc(14px + var(--safe-top, env(safe-area-inset-top, 0px))) 16px 40px !important; }
++  /* 写作窗的阅读态:我的楼不套卡片、宋体、行距松;她的楼是左边一道线的引文;
++     「复制 编辑 第几楼」那行藏起来,点一下楼层才出。 */
++  .desk-main { padding: 14px 16px 10px !important; }
++  .desk-main > div > * + * { margin-top: 20px !important; }
++  .floor-ai-label { display: none !important; }
++  .floor-ai-wrap { max-width: 100% !important; }
++  .floor-ai { max-width: 100% !important; background: transparent !important; border: 0 !important; box-shadow: none !important; padding: 0 2px !important; font-family: var(--font-reading-user, var(--font-serc)); font-size: 16.5px !important; line-height: 1.95 !important; color: var(--ink-deep) !important; }
++  .floor-user-wrap { align-items: flex-start !important; }
++  .floor-user { max-width: 100% !important; background: transparent !important; border-left: 2px solid var(--scale-2); border-radius: 0 !important; padding: 2px 0 2px 12px !important; color: var(--ink2) !important; font-size: 14.5px !important; line-height: 1.7 !important; }
++  html[data-glass="1"] .floor-user { border-radius: 14px 14px 4px 14px !important; padding: 10px 14px !important; color: var(--ink-deep) !important; }
++  .floor-meta { display: none !important; }
++  .floor-group.meta-open .floor-meta { display: flex !important; }
++  .floor-meta * { font-size: 10.5px !important; }
+ }
+ /* 书房挂载期锁 root/body 滚动,不让 Safari 把 window 推着滚 */
+ html.sty-lock-scroll, html.sty-lock-scroll body { overflow: hidden; }
+@@ -214,6 +235,10 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+ 
+   const [view, setView] = useState<View>('shelf');
+   const [railCollapsed, setRailCollapsed] = useState(false);
++  // 墙纸面板开关;打字桌是否正开着一扇窗(手机上底栏要给输入区让位,玻璃模式下头尾栏要浮起来)
++  const [skinOpen, setSkinOpen] = useState(false);
++  const [deskWriting, setDeskWriting] = useState(false);
++  useSkinBoot();
+   const [cameFrom, setCameFrom] = useState<View>('shelf'); // 详情页"← 返回"回哪儿
+   // 左廊常驻后,从打字桌切去别的门要先问一句"现在能走吗"(配方切换在飞禁离窗那道闸,
+   // 见 TypingDesk.tsx requestLeave 定义处注释)——TypingDesk 挂载时才有实例,ref 初始是 null,
+@@ -725,9 +750,14 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+   return (
+     <div className="sty-page" style={{ position: 'relative', boxSizing: 'border-box', background: 'var(--page-bg)', fontFamily: 'var(--font-sans)' }}>
+       <style>{RAIL_CSS}</style>
++      <SkinPanel
++        open={skinOpen}
++        onClose={() => setSkinOpen(false)}
++        onForgetToken={onForgetToken ? () => { if (view === 'desk' && typingDeskRef.current && !typingDeskRef.current.requestLeave()) return; setSkinOpen(false); onForgetToken(); } : undefined}
++      />
+       <div
+         ref={shellRef}
+-        className="sty-shell"
++        className={`sty-shell${deskWriting ? ' writing' : ''}`}
+         style={{
+           position: 'relative', zIndex: 1, background: 'var(--card-bg)',
+         }}
+@@ -763,11 +793,22 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+               );
+             })}
+           </div>
++          {/* 墙纸、玻璃、正文字体:面板见 deskTheme.tsx。手机上廊子变底栏,这颗是第五格;
++              「换口令」在底栏里藏起来,搬进面板最底下一行(桌面上两颗都在廊子里)。 */}
++          <button
++            type="button"
++            className="serc sty-rail-btn sty-rail-skin"
++            style={{ border: 0, marginTop: 'auto', color: 'var(--ink2)' }}
++            title="墙纸、玻璃、正文字体"
++            onClick={() => setSkinOpen(true)}
++          >
++            <span className="sty-rail-glyph">✿</span><span className="sty-rail-label">墙纸</span>
++          </button>
+           {onForgetToken && (
+             <button
+               type="button"
+-              className="serc sty-rail-btn"
+-              style={{ border: 0, marginTop: 'auto', color: 'var(--ink2)' }}
++              className="serc sty-rail-btn sty-rail-forget"
++              style={{ border: 0, color: 'var(--ink2)' }}
+               title="清掉存在这台设备上的口令,重新输入"
+               onClick={() => { if (view === 'desk' && typingDeskRef.current && !typingDeskRef.current.requestLeave()) return; onForgetToken(); }}
+             >
+@@ -776,12 +817,12 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+           )}
+         </nav>
+ 
+-        <div className="sty-main">
++        <div className={`sty-main${deskWriting ? ' desk-writing' : ''}`}>
+         <StudyShellProvider value={shellSlots}>
+         <div className="sty-stage-top" ref={setTopEl} />
+         <div className={`sty-stage-scroll${view === 'desk' ? ' is-page' : ''}`} ref={setScrollEl}>
+         {view === 'desk' ? (
+-          <TypingDesk ref={typingDeskRef} base={base} envOk={envOk} onBack={() => navigate('shelf')} />
++          <TypingDesk ref={typingDeskRef} base={base} envOk={envOk} onBack={() => navigate('shelf')} onModeChange={(m) => setDeskWriting(m === 'write')} />
+         ) : (
+         <div className="sty-scroll">
+ 
+@@ -805,7 +846,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+               </div>
+ 
+               {searching && <div style={{ fontSize: 13, color: 'var(--ink2)', marginTop: 14 }}>正在书架间翻找…</div>}
+-              {!searching && searchError && <div style={{ fontSize: 13, color: '#c2693f', marginTop: 14 }}>搜索翻车了：{searchError}</div>}
++              {!searching && searchError && <div style={{ fontSize: 13, color: 'var(--warn)', marginTop: 14 }}>搜索翻车了：{searchError}</div>}
+               {!searching && !searchError && searchTried && searchResults.length === 0 && (
+                 <div style={{ fontSize: 13, color: 'var(--ink2)', marginTop: 14 }}>没搜到相关的~换个词试试?</div>
+               )}
+@@ -837,7 +878,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+               {statsLoading ? (
+                 <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>正在清点书架…</div>
+               ) : statsError ? (
+-                <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: '#c2693f' }}>书架清点失败：{statsError}</div>
++                <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--warn)' }}>书架清点失败：{statsError}</div>
+               ) : (
+                 <>
+                   {!stats || Object.keys(stats.by_project).length === 0 ? (
+@@ -976,7 +1017,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+             {listLoading ? (
+               <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>正在翻这一格…</div>
+             ) : listError ? (
+-              <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: '#c2693f' }}>翻不开：{listError}</div>
++              <div className="card" style={{ ...cardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--warn)' }}>翻不开：{listError}</div>
+             ) : listItems.length === 0 ? (
+               <div className="card" style={{ ...glassCardStyle, padding: '20px 24px', fontSize: 13, color: 'var(--ink2)' }}>这一格还空着~</div>
+             ) : (
+@@ -1019,7 +1060,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+                   <span className="serc" style={{ fontSize: 18, color: 'var(--ink-deep)' }}>新增一条</span>
+                 </div>
+                 <EditForm form={form} setForm={setForm} projectOptions={projectOptions} />
+-                {saveError && <div style={{ fontSize: 13, color: '#c2693f', marginTop: 12 }}>保存失败：{saveError}</div>}
++                {saveError && <div style={{ fontSize: 13, color: 'var(--warn)', marginTop: 12 }}>保存失败：{saveError}</div>}
+                 <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                   <button className="serc" onClick={handleSave} disabled={saving} style={{ ...btnPrimaryStyle, opacity: saving ? 0.6 : 1 }}>{saving ? '保存中…' : '保存'}</button>
+                   <button className="serc" onClick={cancelEdit} style={pillStyle}>取消</button>
+@@ -1032,7 +1073,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+                   <button className="serc" onClick={backFromDetail} style={pillStyle}>← 返回</button>
+                 </div>
+-                <div style={{ fontSize: 13, color: '#c2693f' }}>翻不开：{detailError}</div>
++                <div style={{ fontSize: 13, color: 'var(--warn)' }}>翻不开：{detailError}</div>
+               </>
+             ) : !detail ? null : detailMode === 'edit' ? (
+               // 编辑表单
+@@ -1042,7 +1083,7 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+                   <span className="serc" style={{ fontSize: 18, color: 'var(--ink-deep)' }}>编辑</span>
+                 </div>
+                 <EditForm form={form} setForm={setForm} projectOptions={projectOptions} />
+-                {saveError && <div style={{ fontSize: 13, color: '#c2693f', marginTop: 12 }}>保存失败：{saveError}</div>}
++                {saveError && <div style={{ fontSize: 13, color: 'var(--warn)', marginTop: 12 }}>保存失败：{saveError}</div>}
+                 <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                   <button className="serc" onClick={handleSave} disabled={saving} style={{ ...btnPrimaryStyle, opacity: saving ? 0.6 : 1 }}>{saving ? '保存中…' : '保存'}</button>
+                   <button className="serc" onClick={cancelEdit} style={pillStyle}>取消</button>
+@@ -1062,11 +1103,11 @@ function StudyRoom({ workerUrl, token, onForgetToken }: { workerUrl?: string; to
+                     className="serc"
+                     onClick={onDeleteClick}
+                     disabled={deleting}
+-                    style={{ ...pillStyle, color: deleteStage === 1 ? '#fffdf5' : '#c2693f', background: deleteStage === 1 ? '#c2693f' : 'var(--card-bg)', opacity: deleting ? 0.6 : 1 }}
++                    style={{ ...pillStyle, color: deleteStage === 1 ? 'var(--on-accent)' : 'var(--warn)', background: deleteStage === 1 ? 'var(--warn)' : 'var(--card-bg)', opacity: deleting ? 0.6 : 1 }}
+                   >
+                     {deleting ? '删除中…' : deleteStage === 1 ? '真的删?再点一次' : '删除'}
+                   </button>
+-                  {deleteError && <span style={{ fontSize: 12.5, color: '#c2693f' }}>{deleteError}</span>}
++                  {deleteError && <span style={{ fontSize: 12.5, color: 'var(--warn)' }}>{deleteError}</span>}
+                 </div>
+ 
+                 <div className="serc" style={{ fontSize: 22, color: 'var(--ink-deep)' }}>{detail.title}</div>

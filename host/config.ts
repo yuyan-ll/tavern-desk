@@ -18,6 +18,7 @@ export interface HostConfig {
   segmentsModule?: string;
   fakeModel: boolean;
   frontendDir: string;
+  fontsDir: string; // 本机字体目录(/fonts/ 路由),见 fonts.ts;缺省 host/fonts
   schemaDir: string;
 }
 
@@ -67,6 +68,7 @@ export function loadConfig(path = DEFAULT_CONFIG_PATH): HostConfig {
     segmentsModule: str(raw.segmentsModule) ? rel(str(raw.segmentsModule)) : undefined,
     fakeModel: raw.fakeModel === true,
     frontendDir: str(raw.frontendDir) ? rel(str(raw.frontendDir)) : resolve(UPSTREAM_DIR, 'frontend/out'),
+    fontsDir: str(raw.fontsDir) ? rel(str(raw.fontsDir)) : resolve(HOST_DIR, 'fonts'),
     schemaDir: resolve(UPSTREAM_DIR, 'examples/cloudflare/schema'),
   };
 }

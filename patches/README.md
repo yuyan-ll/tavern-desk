@@ -14,6 +14,7 @@
 | 006-前端地址取origin口令首次输入 | 五 / 上游改动 6 | `frontend/app/study/page.tsx`,新增 `frontend/app/study/tokenGate.tsx` |
 | 007-导出正文默认不收桌边楼 | 四.5 | `frontend/app/study/TypingDesk.tsx` |
 | 008-桌边判据收紧 | 四.1 补 | `src/core/deskAside.ts`:「桌边」后面要跟冒号 / 逗号 / 空白 / 换行(或整楼只有这两个字),直接接正文的(「桌边的烛火晃了一下」)不算 |
+| 009-墙纸玻璃字体与手机布局 | 10-12 她点的 | `frontend/app/globals.css`(四套墙纸变量、玻璃层、语义色收编)、`frontend/app/layout.tsx`(开机读本机设置)、新增 `frontend/app/study/deskTheme.tsx`(墙纸面板)、`frontend/app/study/page.tsx`(廊子加「墙纸」、手机底栏、写作态标记)、`frontend/app/study/TypingDesk.tsx`(窗头瘦身、⋯菜单补入口、输入区两行、楼层阅读态钩子、刘海让位变量) |
 
 007 说明:施工单四.5 写的是 ChaptersStudio「从楼层收章节的地方」,但 16b7abd 的 ChaptersStudio
 没有从楼层收章节的入口(章节是手填的),楼层变成稿子只有打字桌 ⋯ 菜单「导出正文」这一条路,

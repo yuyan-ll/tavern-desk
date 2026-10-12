@@ -71,6 +71,23 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var root: FrameLayout
     private lateinit var webView: WebView
+
+    // 刘海/状态栏/导航栏的像素距离,最近一次 insets 回调记下来;页面每次加载完也要再推一遍
+    private var safeTop = 0
+    private var safeLeft = 0
+    private var safeRight = 0
+    private var safeBottom = 0
+
+    // 把让位距离写进页面根元素的 CSS 变量(单位 css px = 像素 / 密度)。页面没加载时推了也无妨。
+    private fun pushSafeInsets() {
+        if (!this::webView.isInitialized) return
+        val d = resources.displayMetrics.density
+        fun px(v: Int) = Math.round(v / d)
+        val js = "(function(){var s=document.documentElement.style;" +
+            "s.setProperty('--safe-top','${px(safeTop)}px');s.setProperty('--safe-left','${px(safeLeft)}px');" +
+            "s.setProperty('--safe-right','${px(safeRight)}px');s.setProperty('--safe-bottom','${px(safeBottom)}px');})();"
+        webView.evaluateJavascript(js, null)
+    }
     private lateinit var addressPage: LinearLayout
     private lateinit var addressInput: EditText
     private lateinit var addressError: TextView
@@ -128,9 +145,16 @@ class MainActivity : ComponentActivity() {
         enterImmersive()
 
         // 键盘让位:IME 高度作为底部 padding,WebView 跟着变矮,输入框不被盖住。
+        // 刘海让位:内容画进刘海区(上面 LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS),摄像头的洞会压在页面
+        // 顶上。壳不自己留边(留出来的那一条是壳的底色,跟页面墙纸对不上),而是把刘海/状态栏的
+        // 上左右距离告诉页面,页面顶栏自己让位、用当前墙纸的颜色画那一条(前端读 --safe-top 等变量)。
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
             view.setPadding(0, 0, 0, ime)
+            val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.statusBars())
+            val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            safeTop = cut.top; safeLeft = cut.left; safeRight = cut.right; safeBottom = nav.bottom
+            pushSafeInsets()
             insets
         }
 
@@ -357,10 +381,12 @@ class MainActivity : ComponentActivity() {
 
             override fun onPageStarted(v: WebView, url: String?, favicon: Bitmap?) {
                 if (scriptHandler == null && originOf(url) == deskOrigin) v.evaluateJavascript(DOWNLOAD_HOOK_JS, null)
+                pushSafeInsets()
             }
 
             override fun onPageFinished(v: WebView, url: String?) {
                 if (scriptHandler == null && originOf(url) == deskOrigin) v.evaluateJavascript(DOWNLOAD_HOOK_JS, null)
+                pushSafeInsets()
             }
 
             override fun onReceivedError(v: WebView, request: WebResourceRequest, error: WebResourceError) {

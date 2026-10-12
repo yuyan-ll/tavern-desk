@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { openD1, type D1DatabaseShim } from './d1shim.ts';
 import { toRequest, writeResponse, requestOrigin, PendingWork } from './bridge.ts';
 import { serveStatic } from './static.ts';
+import { serveFonts } from './fonts.ts';
 import { loadConfig, readApiKey, DEFAULT_CONFIG_PATH, type HostConfig } from './config.ts';
 import { MistletoeBackend, anthropicDeskBackend, fakeDeskBackend } from './backend.ts';
 import { FixedSegments, assertSegmentProvider, type SegmentProvider } from './segments.ts';
@@ -97,6 +98,8 @@ export async function createDeskHost(config: HostConfig): Promise<DeskHost> {
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
+      // 本机字体(/fonts/)不经口令:只读、只认一层文件名,见 fonts.ts 头注释
+      if (await serveFonts(req, res, config.fontsDir)) return;
       if (await serveStatic(req, res, config.frontendDir)) return;
       const origin = requestOrigin(req);
       // ALLOWED_ORIGINS 没配就是自己的 origin(同源请求本来也不需要 CORS,这里给预检兜个底)。
